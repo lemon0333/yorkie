@@ -1,0 +1,110 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1851	    677102 ns/op	  903643 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      36	  46723299 ns/op	47197264 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     574	   1917290 ns/op	  910335 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      12	  85312056 ns/op	64321362 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3018193458 ns/op	4053763104 B/op	13418086 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	8.780s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1453	   1010553 ns/op	  903646 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      28	  44104985 ns/op	47196936 B/op	  108535 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     792	   1393869 ns/op	  910335 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      16	  70396766 ns/op	64321278 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3626614334 ns/op	4053763024 B/op	13418086 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.275s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1543	    918583 ns/op	  903638 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      32	  41539953 ns/op	47197126 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     975	   1176199 ns/op	  910336 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      19	  58487895 ns/op	64321256 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3292787875 ns/op	4053763040 B/op	13418087 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	8.822s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1666	    857545 ns/op	  903641 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      32	  43065082 ns/op	47197108 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     819	   1461287 ns/op	  910335 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      15	  70523378 ns/op	64321342 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3549466750 ns/op	4053763200 B/op	13418087 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.335s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1704	    895077 ns/op	  903645 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      25	  46368902 ns/op	47197396 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     772	   1489593 ns/op	  910336 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      14	  75005057 ns/op	64321347 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3442982708 ns/op	4053763088 B/op	13418087 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.068s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1646	    809099 ns/op	  903641 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      42	  31966272 ns/op	47196971 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	    1142	    998754 ns/op	  910335 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      22	  59647155 ns/op	64321548 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3569103292 ns/op	4053763168 B/op	13418087 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.183s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1603	    854382 ns/op	  903641 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      36	  39894326 ns/op	47197108 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     972	   1142747 ns/op	  910336 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      21	  53705522 ns/op	64321332 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3618516167 ns/op	4053763056 B/op	13418086 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.331s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1634	    879301 ns/op	  903644 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      32	  43196977 ns/op	47197124 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     802	   1488566 ns/op	  910337 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      16	  68148773 ns/op	64321373 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3561086583 ns/op	4053763008 B/op	13418086 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.343s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1692	    879260 ns/op	  903640 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      25	  50875743 ns/op	47197160 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     655	   1713716 ns/op	  910336 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      14	  75983970 ns/op	64321314 B/op	  103700 allocs/op
+BenchmarkTextEditing-10                       	       1	3458498167 ns/op	4053763088 B/op	13418086 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.141s
+goos: darwin
+goarch: arm64
+pkg: github.com/yorkie-team/yorkie/test/bench
+cpu: Apple M4
+BenchmarkDocument/text_edit_gc_100-10         	    1950	    676469 ns/op	  903642 B/op	    9727 allocs/op
+BenchmarkDocument/text_edit_gc_1000-10        	      42	  36453438 ns/op	47197092 B/op	  108536 allocs/op
+BenchmarkDocument/text_split_gc_100-10        	     818	   1469780 ns/op	  910334 B/op	    8527 allocs/op
+BenchmarkDocument/text_split_gc_1000-10       	      16	  69471198 ns/op	64321477 B/op	  103701 allocs/op
+BenchmarkTextEditing-10                       	       1	3237680916 ns/op	4053763104 B/op	13418087 allocs/op
+PASS
+ok  	github.com/yorkie-team/yorkie/test/bench	9.096s
