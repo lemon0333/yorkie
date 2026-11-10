@@ -39,8 +39,10 @@ var TreeSkeletonGC = true
 //     caret, tombstones included, or nil for the end of the parent. Inside a
 //     text node it is the continuation (createdAt, k).
 //
-// A node without one (legacy content, element split products, nodes moved by a
-// merge) is placed by the createdAt-only RGA rule and stops a scan.
+// A node without one (legacy content, element split products) was placed by
+// the createdAt-only rule. A scan stops at such a node, except at an element
+// split product, which it passes over (see isSplitProduct). A node moved by a
+// merge keeps the origin it was inserted with.
 type TreeInsertOrigin struct {
 	Left  *TreeNodeID
 	Right *TreeNodeID
