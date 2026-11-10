@@ -154,6 +154,11 @@ func (t *TextValue) Split(offset int) RGATreeSplitValue {
 }
 
 // DeepCopy copies itself deeply.
+// skeletonValue returns the empty value a collected tombstone keeps.
+func (t *TextValue) skeletonValue() RGATreeSplitValue {
+	return NewTextValue("", NewRHT())
+}
+
 func (t *TextValue) DeepCopy() RGATreeSplitValue {
 	return &TextValue{
 		attrs: t.attrs.DeepCopy(),
@@ -327,6 +332,10 @@ func (t *Text) DeepCopy() (Element, error) {
 func (t *Text) GCPairs() []GCPair {
 	var pairs []GCPair
 	for _, node := range t.Nodes() {
+		if node.IsSkeleton() {
+			// Already collected.
+			continue
+		}
 		if node.removedAt != nil {
 			// Text.DataSize skips a removed node, so this one was never in
 			// the Live the scan's root was built with.

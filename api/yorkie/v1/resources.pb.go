@@ -1381,7 +1381,12 @@ type TextNode struct {
 	// 2 = left is this node itself (a split continuation), 4 = right is the
 	// next node, 8 = right is the previous node's right origin (a run typed
 	// forward shares one right origin).
-	OriginFlags   uint32 `protobuf:"varint,10,opt,name=origin_flags,json=originFlags,proto3" json:"origin_flags,omitempty"`
+	OriginFlags uint32 `protobuf:"varint,10,opt,name=origin_flags,json=originFlags,proto3" json:"origin_flags,omitempty"`
+	// skeleton_len > 0 marks a garbage-collected tombstone kept only for its
+	// position: value and attributes are dropped, the ID range
+	// [id.offset, id.offset + skeleton_len) and the origins are kept so
+	// insertion origins that name it resolve the same on every replica.
+	SkeletonLen   uint32 `protobuf:"varint,11,opt,name=skeleton_len,json=skeletonLen,proto3" json:"skeleton_len,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1475,6 +1480,13 @@ func (x *TextNode) GetOriginRight() *TextNodeID {
 func (x *TextNode) GetOriginFlags() uint32 {
 	if x != nil {
 		return x.OriginFlags
+	}
+	return 0
+}
+
+func (x *TextNode) GetSkeletonLen() uint32 {
+	if x != nil {
+		return x.SkeletonLen
 	}
 	return 0
 }
@@ -5512,7 +5524,7 @@ const file_yorkie_v1_resources_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x02 \x01(\v2\x15.yorkie.v1.TimeTicketR\tupdatedAt\x12\x1d\n" +
 	"\n" +
-	"is_removed\x18\x03 \x01(\bR\tisRemoved\"\x81\x04\n" +
+	"is_removed\x18\x03 \x01(\bR\tisRemoved\"\xa4\x04\n" +
 	"\bTextNode\x12%\n" +
 	"\x02id\x18\x01 \x01(\v2\x15.yorkie.v1.TextNodeIDR\x02id\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x124\n" +
@@ -5528,7 +5540,8 @@ const file_yorkie_v1_resources_proto_rawDesc = "" +
 	"originLeft\x128\n" +
 	"\forigin_right\x18\t \x01(\v2\x15.yorkie.v1.TextNodeIDR\voriginRight\x12!\n" +
 	"\forigin_flags\x18\n" +
-	" \x01(\rR\voriginFlags\x1aR\n" +
+	" \x01(\rR\voriginFlags\x12!\n" +
+	"\fskeleton_len\x18\v \x01(\rR\vskeletonLen\x1aR\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12)\n" +
 	"\x05value\x18\x02 \x01(\v2\x13.yorkie.v1.NodeAttrR\x05value:\x028\x01\"Z\n" +

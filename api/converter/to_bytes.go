@@ -275,6 +275,11 @@ func toTextNodes(textNodes []*crdt.RGATreeSplitNode[*crdt.TextValue]) []*api.Tex
 			RemovedAt:  ToTimeTicket(textNode.RemovedAt()),
 		}
 
+		if textNode.IsSkeleton() {
+			// A skeleton's removal time is a shared stand-in; see Purge.
+			pbTextNode.SkeletonLen = uint32(textNode.SkeletonLen())
+			pbTextNode.RemovedAt = nil
+		}
 		if textNode.InsPrevID() != nil {
 			pbTextNode.InsPrevId = toTextNodeID(textNode.InsPrevID())
 		}
@@ -323,7 +328,7 @@ func prevOrigin(nodes []*crdt.RGATreeSplitNode[*crdt.TextValue], i int) *crdt.In
 // form an insertion's left origin uses.
 func endOf(node *crdt.RGATreeSplitNode[*crdt.TextValue]) *crdt.RGATreeSplitNodeID {
 	id := node.ID()
-	return crdt.NewRGATreeSplitNodeID(id.CreatedAt(), id.Offset()+node.Value().Len())
+	return crdt.NewRGATreeSplitNodeID(id.CreatedAt(), id.Offset()+node.ContentLen())
 }
 
 func toTextNodeID(id *crdt.RGATreeSplitNodeID) *api.TextNodeID {

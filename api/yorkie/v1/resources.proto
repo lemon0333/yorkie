@@ -328,6 +328,11 @@ message TextNode {
   // next node, 8 = right is the previous node's right origin (a run typed
   // forward shares one right origin).
   uint32 origin_flags = 10;
+  // skeleton_len > 0 marks a garbage-collected tombstone kept only for its
+  // position: value and attributes are dropped, the ID range
+  // [id.offset, id.offset + skeleton_len) and the origins are kept so
+  // insertion origins that name it resolve the same on every replica.
+  uint32 skeleton_len = 11;
 }
 
 message TextNodeID {

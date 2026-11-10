@@ -85,14 +85,6 @@ type GCChild interface {
 // The type parameter is only there because the two purge paths name their child
 // differently: Root.GarbageCollect walks removed elements as Element and
 // removed nodes as GCChild, and both end in the same physical unlink.
-// GCPin is an optional capability of a GC parent whose children can be
-// referenced by other children (Text insertion origins). A pinned child is
-// not purged even when its removal is causally stable; the purge is retried
-// on a later pass once the references are gone.
-type GCPin interface {
-	IsPinned(child GCChild) bool
-}
-
 type GCBarrier[C any] interface {
 	// PurgeBarrierAt returns the additional ticket that must be covered before
 	// the given child may be unlinked, or nil when the child has no successor

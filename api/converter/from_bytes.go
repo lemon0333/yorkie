@@ -475,6 +475,15 @@ func fromTextNode(
 		}
 		textNode.SetRemovedAt(removedAt)
 	}
+	if pbNode.SkeletonLen > 0 {
+		// A collected tombstone: no value, no attributes, and the shared
+		// stand-in removal time (see RGATreeSplit.Purge).
+		if pbNode.Value != "" || len(pbNode.Attributes) > 0 {
+			return nil, fmt.Errorf("text node skeleton must be empty")
+		}
+		textNode.SetSkeleton(int(pbNode.SkeletonLen))
+		textNode.SetRemovedAt(time.InitialTicket)
+	}
 	if pbNode.HasOrigin {
 		left, err := fromTextNodeID(pbNode.OriginLeft)
 		if err != nil {
