@@ -317,15 +317,17 @@ message TextNode {
   TimeTicket removed_at = 3;
   TextNodeID ins_prev_id = 4;
   map<string, NodeAttr> attributes = 5;
-  bool has_origin = 6;
-  TextNodeID origin_left = 7;
-  TextNodeID origin_right = 8;
+  // Field 6 is taken by removal_events in yorkie-js-sdk; the origin fields
+  // start at 7 to stay wire-compatible with it.
+  bool has_origin = 7;
+  TextNodeID origin_left = 8;
+  TextNodeID origin_right = 9;
   // Bits for origins that are the node's neighbours in the encoded order,
   // whose IDs are then omitted: 1 = left is the end of the previous node,
   // 2 = left is this node itself (a split continuation), 4 = right is the
   // next node, 8 = right is the previous node's right origin (a run typed
   // forward shares one right origin).
-  uint32 origin_flags = 9;
+  uint32 origin_flags = 10;
 }
 
 message TextNodeID {

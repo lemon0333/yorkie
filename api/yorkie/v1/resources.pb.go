@@ -1365,21 +1365,23 @@ func (x *NodeAttr) GetIsRemoved() bool {
 }
 
 type TextNode struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	Id          *TextNodeID            `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Value       string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	RemovedAt   *TimeTicket            `protobuf:"bytes,3,opt,name=removed_at,json=removedAt,proto3" json:"removed_at,omitempty"`
-	InsPrevId   *TextNodeID            `protobuf:"bytes,4,opt,name=ins_prev_id,json=insPrevId,proto3" json:"ins_prev_id,omitempty"`
-	Attributes  map[string]*NodeAttr   `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	HasOrigin   bool                   `protobuf:"varint,6,opt,name=has_origin,json=hasOrigin,proto3" json:"has_origin,omitempty"`
-	OriginLeft  *TextNodeID            `protobuf:"bytes,7,opt,name=origin_left,json=originLeft,proto3" json:"origin_left,omitempty"`
-	OriginRight *TextNodeID            `protobuf:"bytes,8,opt,name=origin_right,json=originRight,proto3" json:"origin_right,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         *TextNodeID            `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Value      string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	RemovedAt  *TimeTicket            `protobuf:"bytes,3,opt,name=removed_at,json=removedAt,proto3" json:"removed_at,omitempty"`
+	InsPrevId  *TextNodeID            `protobuf:"bytes,4,opt,name=ins_prev_id,json=insPrevId,proto3" json:"ins_prev_id,omitempty"`
+	Attributes map[string]*NodeAttr   `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Field 6 is taken by removal_events in yorkie-js-sdk; the origin fields
+	// start at 7 to stay wire-compatible with it.
+	HasOrigin   bool        `protobuf:"varint,7,opt,name=has_origin,json=hasOrigin,proto3" json:"has_origin,omitempty"`
+	OriginLeft  *TextNodeID `protobuf:"bytes,8,opt,name=origin_left,json=originLeft,proto3" json:"origin_left,omitempty"`
+	OriginRight *TextNodeID `protobuf:"bytes,9,opt,name=origin_right,json=originRight,proto3" json:"origin_right,omitempty"`
 	// Bits for origins that are the node's neighbours in the encoded order,
 	// whose IDs are then omitted: 1 = left is the end of the previous node,
 	// 2 = left is this node itself (a split continuation), 4 = right is the
 	// next node, 8 = right is the previous node's right origin (a run typed
 	// forward shares one right origin).
-	OriginFlags   uint32 `protobuf:"varint,9,opt,name=origin_flags,json=originFlags,proto3" json:"origin_flags,omitempty"`
+	OriginFlags   uint32 `protobuf:"varint,10,opt,name=origin_flags,json=originFlags,proto3" json:"origin_flags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5521,11 +5523,12 @@ const file_yorkie_v1_resources_proto_rawDesc = "" +
 	"attributes\x18\x05 \x03(\v2#.yorkie.v1.TextNode.AttributesEntryR\n" +
 	"attributes\x12\x1d\n" +
 	"\n" +
-	"has_origin\x18\x06 \x01(\bR\thasOrigin\x126\n" +
-	"\vorigin_left\x18\a \x01(\v2\x15.yorkie.v1.TextNodeIDR\n" +
+	"has_origin\x18\a \x01(\bR\thasOrigin\x126\n" +
+	"\vorigin_left\x18\b \x01(\v2\x15.yorkie.v1.TextNodeIDR\n" +
 	"originLeft\x128\n" +
-	"\forigin_right\x18\b \x01(\v2\x15.yorkie.v1.TextNodeIDR\voriginRight\x12!\n" +
-	"\forigin_flags\x18\t \x01(\rR\voriginFlags\x1aR\n" +
+	"\forigin_right\x18\t \x01(\v2\x15.yorkie.v1.TextNodeIDR\voriginRight\x12!\n" +
+	"\forigin_flags\x18\n" +
+	" \x01(\rR\voriginFlags\x1aR\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12)\n" +
 	"\x05value\x18\x02 \x01(\v2\x13.yorkie.v1.NodeAttrR\x05value:\x028\x01\"Z\n" +
