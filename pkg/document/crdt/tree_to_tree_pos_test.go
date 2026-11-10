@@ -38,6 +38,10 @@ import (
 // sequence that was known to need it, so it is pinned here at the level it
 // lives at.
 func TestToTreePosRejectsAChainEndingInAPurgedNode(t *testing.T) {
+	// Pins the physical purge, which skeleton GC does not use.
+	defer func(prev bool) { crdt.TreeSkeletonGC = prev }(crdt.TreeSkeletonGC)
+	crdt.TreeSkeletonGC = false
+
 	ctx := helper.TextChangeContext(helper.TestRoot())
 	tree := createHelloTree(t, ctx) // <r><p>hello</p></r>
 

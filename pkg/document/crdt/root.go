@@ -673,7 +673,10 @@ func (r *Root) collect(vector time.VersionVector) (int, int, error) {
 		// A Text node is not unlinked by its purge but kept as a content-less
 		// skeleton, so its size has to be read before the purge empties it.
 		var purgedSize resource.DataSize
-		_, keepsSkeleton := pair.Child.(interface{ IsSkeleton() bool })
+		keepsSkeleton := false
+		if k, ok := pair.Child.(interface{ keptAsSkeleton() bool }); ok {
+			keepsSkeleton = k.keptAsSkeleton()
+		}
 		if keepsSkeleton {
 			purgedSize = pair.Child.DataSize()
 		}

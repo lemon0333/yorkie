@@ -757,6 +757,11 @@ func TestTreeEdit(t *testing.T) {
 	})
 
 	t.Run("length update after GC test", func(t *testing.T) {
+		// Pins TotalLength under the physical purge, which skeleton GC
+		// (where the collected node keeps its place) does not use.
+		defer func(prev bool) { crdt.TreeSkeletonGC = prev }(crdt.TreeSkeletonGC)
+		crdt.TreeSkeletonGC = false
+
 		root := helper.TestRoot()
 		ctx := helper.TextChangeContext(root)
 		//       0

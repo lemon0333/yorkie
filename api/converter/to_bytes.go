@@ -413,6 +413,17 @@ func toTreeNode(treeNode *crdt.TreeNode, depth int) *api.TreeNode {
 		pbNode.MergedAt = ToTimeTicket(treeNode.MergedAt)
 	}
 
+	if o := treeNode.Origin; o != nil {
+		pbNode.HasOrigin = true
+		if o.Left != nil {
+			pbNode.OriginLeft = toTreeNodeID(o.Left)
+		}
+		if o.Right != nil {
+			pbNode.OriginRight = toTreeNodeID(o.Right)
+		}
+	}
+	pbNode.Skeleton = treeNode.IsSkeleton()
+
 	return pbNode
 }
 

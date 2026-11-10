@@ -177,6 +177,32 @@ type TreeNode struct {
 	// NodeMapByID every position resolution) would be prohibitively
 	// expensive.
 	mergedInto *TreeNodeID
+
+	// Origin is the insertion context recorded when this node was inserted
+	// (see TreeInsertOrigin), or nil for a node placed by the createdAt-only
+	// rule.
+	Origin *TreeInsertOrigin
+
+	// skeleton marks a tombstone whose garbage collection has run. It stays
+	// in its parent's child list so origins that name it, and the sibling
+	// windows the placement rule scans, look the same on replicas that
+	// collected it and on replicas that did not; its subtree is dropped.
+	skeleton bool
+}
+
+// keptAsSkeleton reports whether a purge keeps this node as a skeleton.
+func (n *TreeNode) keptAsSkeleton() bool { return TreeSkeletonGC }
+
+// IsSkeleton reports whether this node is a collected tombstone kept only
+// for its position.
+func (n *TreeNode) IsSkeleton() bool {
+	return n.skeleton
+}
+
+// SetSkeleton marks this node as a collected tombstone. Used when decoding a
+// snapshot.
+func (n *TreeNode) SetSkeleton(skeleton bool) {
+	n.skeleton = skeleton
 }
 
 // Children returns the children of this node.
@@ -378,6 +404,10 @@ func (n *TreeNode) Split(
 		// piece was never live, so the net-new size the split created goes
 		// straight to docSize.GC when the pair is registered; return a zero
 		// diff to the caller (which accounts diffs to docSize.Live).
+		if split.skeleton {
+			// Split off a collected tombstone: already out of every ledger.
+			return resource.DataSize{}, nil
+		}
 		if split.removedAt != nil {
 			gcSize := diff
 			tree.pendingGCPairs = append(tree.pendingGCPairs, GCPair{
@@ -445,6 +475,12 @@ func (n *TreeNode) SplitText(
 	rightNode.removedAt = n.removedAt
 	rightNode.MergedFrom = n.MergedFrom
 	rightNode.MergedAt = n.MergedAt
+	rightNode.skeleton = n.skeleton
+	if n.Origin != nil {
+		// The right piece continues the same insertion: its left origin is
+		// the boundary after the left piece, and it shares the right origin.
+		rightNode.Origin = &TreeInsertOrigin{Left: rightNode.id, Right: n.Origin.Right}
+	}
 
 	if err := n.Index.Parent.InsertAfterInternal(
 		rightNode.Index,
@@ -613,6 +649,11 @@ func recalcLength(n *index.Node[*TreeNode]) {
 
 // remove marks the node as removed.
 func (n *TreeNode) remove(removedAt *time.Ticket) bool {
+	if n.skeleton {
+		// Collected: a removal has nothing left to change, as in main where
+		// the node is gone.
+		return false
+	}
 	if n.removedAt == nil {
 		n.removedAt = removedAt
 
@@ -638,12 +679,13 @@ func (n *TreeNode) unremove() {
 		return
 	}
 	n.removedAt = nil
+	n.skeleton = false
 	n.Index.UpdateAncestorsLength(n.Index.PaddedLength())
 }
 
 func (n *TreeNode) canDelete(removedAt *time.Ticket, creationKnown, tombstoneKnown bool) bool {
 	// NOTE(sigmaith): Skip if the node's creation was not visible to this operation.
-	if !creationKnown {
+	if !creationKnown || n.skeleton {
 		return false
 	}
 
@@ -686,6 +728,8 @@ func (n *TreeNode) DeepCopy() (*TreeNode, error) {
 	clone.mergedInto = n.mergedInto
 	clone.MergedFrom = n.MergedFrom
 	clone.MergedAt = n.MergedAt
+	clone.Origin = n.Origin
+	clone.skeleton = n.skeleton
 
 	if n.IsText() {
 		return clone, nil
@@ -752,6 +796,10 @@ func (n *TreeNode) DropEngineOnlyLinks() {
 		node.Value.MergedFrom = nil
 		node.Value.MergedAt = nil
 		node.Value.mergedInto = nil
+		// Origins and the skeleton mark are engine state too: Edit assigns
+		// origins to inserted content itself.
+		node.Value.Origin = nil
+		node.Value.skeleton = false
 	})
 }
 
@@ -803,6 +851,7 @@ func (n *TreeNode) ReissueIDs(issueTimeTicket func() *time.Ticket) {
 		value.MergedFrom = nil
 		value.MergedAt = nil
 		value.mergedInto = nil
+		value.Origin = nil
 	})
 }
 
@@ -1120,13 +1169,45 @@ func (t *Tree) Purge(child GCChild) error {
 	// it was booked against (it sits in gcNodePairMap until the minimum synced
 	// version passes it), so a node detached in between reaches here. Dropping
 	// it keeps GarbageCollect advancing instead of panicking on the deref.
-	if node.Index == nil || node.Index.Parent == nil {
+	if node.Index == nil || node.Index.Parent == nil || node.skeleton {
 		return nil
 	}
 
-	if err := node.Index.Parent.RemoveChild(node.Index); err != nil {
-		return err
+	if !TreeSkeletonGC {
+		if err := node.Index.Parent.RemoveChild(node.Index); err != nil {
+			return err
+		}
+		t.unregisterPurged(node)
+		return nil
 	}
+
+	// Keep the node itself as a skeleton in its parent's child list instead
+	// of detaching it: insertion origins name siblings by ID and the placement
+	// rule scans the siblings between two origins, so both have to look the
+	// same on replicas that collected this tombstone and on replicas that did
+	// not. Only its subtree goes -- nothing can be inserted inside a removed
+	// node once its removal is stable.
+	if !node.IsText() {
+		for _, c := range node.Index.Children(true) {
+			if !c.Value.IsRemoved() {
+				continue
+			}
+			if err := node.Index.RemoveChild(c); err != nil {
+				return err
+			}
+			index.TraverseNode(c, func(d *index.Node[*TreeNode], _ int) {
+				t.unregisterPurged(d.Value)
+			})
+		}
+	}
+	node.skeleton = true
+
+	return nil
+}
+
+// unregisterPurged drops a node detached by a skeleton purge from the ID map
+// and from its split chain, as a physical purge does.
+func (t *Tree) unregisterPurged(node *TreeNode) {
 	// NodeMapByID is keyed by ID, so an unconditional Remove would also
 	// unregister a different node that shares this one's ID — see putNode.
 	// Only drop the entry this node actually holds.
@@ -1136,9 +1217,6 @@ func (t *Tree) Purge(child GCChild) error {
 
 	insPrevID := node.InsPrevID
 	insNextID := node.InsNextID
-	// NOTE: findFloorNode may return nil when the insertion neighbor was
-	// already purged (restore/recreate reorders GC so a neighbor can be
-	// collected first). Guard both derefs rather than assuming survival.
 	if insPrevID != nil {
 		if insPrev := t.findFloorNode(insPrevID); insPrev != nil {
 			insPrev.InsNextID = insNextID
@@ -1151,8 +1229,6 @@ func (t *Tree) Purge(child GCChild) error {
 	}
 	node.InsPrevID = nil
 	node.InsNextID = nil
-
-	return nil
 }
 
 // TreeVisibleEdit is one visible change an identity-preserving Restore or
@@ -1206,6 +1282,28 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 		}
 	}
 
+	// A skeleton is a collected tombstone, so it is revived the way a purged
+	// node is recreated (recreateFromSpan), not the way a tombstone is
+	// un-removed: under a removed parent it comes back tombstoned with the
+	// parent's removal ticket, otherwise live and reported as recreated (it is
+	// in no GC ledger to move out of).
+	reviveSkeleton := func(node *TreeNode) {
+		node.skeleton = false
+		if p := node.Index.Parent; p != nil && p.Value.IsRemoved() {
+			node.removedAt = p.Value.RemovedAt()
+			gcSize := node.DataSize()
+			t.pendingGCPairs = append(t.pendingGCPairs, GCPair{
+				Parent:     t,
+				Child:      node,
+				GCOnlySize: &gcSize,
+			})
+			return
+		}
+		node.unremove()
+		recreated = append(recreated, node)
+		revived(node)
+	}
+
 	for _, span := range spans {
 		if !span.kindAgrees() {
 			continue
@@ -1213,7 +1311,9 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 		if !span.IsText {
 			node := t.findFloorNode(span.ID)
 			if node != nil && node.id.Equal(span.ID) {
-				if node.IsRemoved() {
+				if node.skeleton {
+					reviveSkeleton(node)
+				} else if node.IsRemoved() {
 					node.unremove()
 					untombstoned = append(untombstoned, node)
 					revived(node)
@@ -1252,7 +1352,9 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 				if iErr != nil {
 					return nil, nil, nil, diff, nil, iErr
 				}
-				if target.IsRemoved() {
+				if target.skeleton {
+					reviveSkeleton(target)
+				} else if target.IsRemoved() {
 					target.unremove()
 					untombstoned = append(untombstoned, target)
 					revived(target)
@@ -1700,6 +1802,9 @@ func (t *Tree) GCPairs() []GCPair {
 		// the same BytesTo* reader a snapshot is, so a crafted one can mark the
 		// root removed. Leave it unbooked; it is unreachable garbage either
 		// way, and the tree element that holds it is collected as a whole.
+		if node.skeleton {
+			continue
+		}
 		if node.removedAt != nil && node.Index != nil && node.Index.Parent != nil {
 			// Tree.DataSize skips a removed node, so this one was never in
 			// the Live the scan's root was built with.
@@ -2025,19 +2130,54 @@ func (t *Tree) Edit(
 	versionVector time.VersionVector,
 	needsReverseInfo bool,
 ) ([]GCPair, resource.DataSize, TreeEditReverseInfo, error) {
+	return t.EditWithOrigin(
+		from, to, contents, splitLevel, editedAt, issueTimeTicket,
+		versionVector, needsReverseInfo, nil,
+	)
+}
+
+// EditWithOrigin is Edit with the right insertion origin of the contents
+// (see TreeInsertOrigin). Only rightOrigin.Right is read; the left origin is
+// the from position. A nil rightOrigin keeps the createdAt-only rule.
+func (t *Tree) EditWithOrigin(
+	from, to *TreePos,
+	contents []*TreeNode,
+	splitLevel int,
+	editedAt *time.Ticket,
+	issueTimeTicket func() *time.Ticket,
+	versionVector time.VersionVector,
+	needsReverseInfo bool,
+	rightOrigin *TreeInsertOrigin,
+) ([]GCPair, resource.DataSize, TreeEditReverseInfo, error) {
 	var diff resource.DataSize
 	var pairs []GCPair
 	var info TreeEditReverseInfo
 
+	var origin *TreeInsertOrigin
+	if rightOrigin != nil && len(contents) > 0 {
+		if left, ok := t.canonicalLeft(from); ok {
+			origin = &TreeInsertOrigin{Left: left, Right: rightOrigin.Right}
+		}
+	}
+
 	// Phase 1: Position Resolution — resolve CRDTTreePos to tree nodes.
-	fromParent, fromLeft, diffFrom, err := t.FindTreeNodesWithSplitText(from, editedAt)
+	fromParent, fromLeft, diffFrom, err := t.findTreeNodesWithSplitText(from, editedAt, BoundaryInsert, origin)
 	if err != nil {
 		return t.drainPendingGCPairs(), diff, info, err
 	}
-	toParent, toLeft, diffTo, err := t.FindTreeNodesWithSplitText(to, editedAt)
-	if err != nil {
-		diff.Add(diffFrom)
-		return t.drainPendingGCPairs(), diff, info, err
+	var toParent, toLeft *TreeNode
+	var diffTo resource.DataSize
+	if origin != nil && from.Equal(to) {
+		// A pure insertion: the range is empty wherever the two-origin rule
+		// placed it. Resolving to on its own would apply the createdAt rule
+		// and could open a range over concurrent siblings.
+		toParent, toLeft = fromParent, fromLeft
+	} else {
+		toParent, toLeft, diffTo, err = t.FindTreeNodesWithSplitText(to, editedAt)
+		if err != nil {
+			diff.Add(diffFrom)
+			return t.drainPendingGCPairs(), diff, info, err
+		}
 	}
 
 	diff.Add(diffFrom, diffTo)
@@ -2167,6 +2307,9 @@ func (t *Tree) Edit(
 	// node carries. Checking before that would let the copy through and leave
 	// two nodes under one ID.
 	contents = t.dropDuplicateContents(contents, editedAt)
+	if origin != nil {
+		assignTreeOrigins(contents, origin)
+	}
 
 	// Measured now, while the content is still detached: inserting under a
 	// removed parent tombstones it, which shrinks what its size reads back as.
@@ -4304,6 +4447,15 @@ func (t *Tree) FindTreeNodesWithSplitText(pos *TreePos, editedAt *time.Ticket, b
 	if len(boundary) > 0 {
 		mode = boundary[0]
 	}
+	return t.findTreeNodesWithSplitText(pos, editedAt, mode, nil)
+}
+
+// findTreeNodesWithSplitText is FindTreeNodesWithSplitText that, given an
+// insertion origin, places among concurrent siblings by the two-origin rule
+// instead of the createdAt-only one.
+func (t *Tree) findTreeNodesWithSplitText(
+	pos *TreePos, editedAt *time.Ticket, mode PosBoundary, origin *TreeInsertOrigin,
+) (*TreeNode, *TreeNode, resource.DataSize, error) {
 
 	var diff resource.DataSize
 	// 01. Find the parent and left sibling nodes of the given position.
@@ -4380,6 +4532,15 @@ func (t *Tree) FindTreeNodesWithSplitText(pos *TreePos, editedAt *time.Ticket, b
 	// 04. Find the appropriate left node. If some nodes are inserted at the
 	// same position concurrently, then we need to find the appropriate left
 	// node. This is similar to RGA.
+	if origin != nil {
+		dest, d, err := t.integrateTree(realParentNode, leftNode, origin, editedAt)
+		diff.Add(d)
+		if err != nil {
+			return nil, nil, diff, err
+		}
+		return realParentNode, dest, diff, nil
+	}
+
 	idx := 0
 	if !isLeftMost {
 		idx = realParentNode.Index.OffsetOfChild(leftNode.Index) + 1

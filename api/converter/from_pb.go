@@ -877,6 +877,15 @@ func fromTreeEdit(pbTreeEdit *api.Operation_TreeEdit) (*operations.TreeEdit, err
 		splitTickets = append(splitTickets, ticket)
 	}
 	edit.SetSplitTickets(splitTickets)
+	if pbTreeEdit.HasOrigin {
+		origin := &crdt.TreeInsertOrigin{}
+		if pbTreeEdit.OriginRight != nil {
+			if origin.Right, err = fromTreeNodeID(pbTreeEdit.OriginRight); err != nil {
+				return nil, err
+			}
+		}
+		edit.SetTreeOrigin(origin)
+	}
 
 	return edit, nil
 }
@@ -1167,6 +1176,27 @@ func fromTreeNode(pbNode *api.TreeNode) (*crdt.TreeNode, error) {
 		return nil, err
 	}
 	node.SetRemovedAt(removedAt)
+
+	if pbNode.HasOrigin {
+		origin := &crdt.TreeInsertOrigin{}
+		if pbNode.OriginLeft != nil {
+			if origin.Left, err = fromTreeNodeID(pbNode.OriginLeft); err != nil {
+				return nil, err
+			}
+		}
+		if pbNode.OriginRight != nil {
+			if origin.Right, err = fromTreeNodeID(pbNode.OriginRight); err != nil {
+				return nil, err
+			}
+		}
+		node.Origin = origin
+	}
+	if pbNode.Skeleton {
+		if removedAt == nil {
+			return nil, goerrors.New("tree node skeleton must be removed")
+		}
+		node.SetSkeleton(true)
+	}
 
 	return node, nil
 }

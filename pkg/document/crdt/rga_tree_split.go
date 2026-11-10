@@ -324,6 +324,10 @@ func (s *RGATreeSplitNode[V]) ContentLen() int {
 	return s.contentLen()
 }
 
+// keptAsSkeleton reports that a purge keeps this node as a skeleton, so the
+// GC ledger has to read its size before the purge empties it.
+func (s *RGATreeSplitNode[V]) keptAsSkeleton() bool { return true }
+
 // IsSkeleton reports whether this node is a garbage-collected tombstone kept
 // only for its position.
 func (s *RGATreeSplitNode[V]) IsSkeleton() bool {

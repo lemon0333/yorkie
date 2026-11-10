@@ -562,6 +562,12 @@ func toTreeEdit(e *operations.TreeEdit) (*api.Operation_TreeEdit_, error) {
 	for _, ticket := range e.SplitTickets() {
 		pbTreeEdit.SplitTickets = append(pbTreeEdit.SplitTickets, ToTimeTicket(ticket))
 	}
+	if o := e.TreeOrigin(); o != nil {
+		pbTreeEdit.HasOrigin = true
+		if o.Right != nil {
+			pbTreeEdit.OriginRight = toTreeNodeID(o.Right)
+		}
+	}
 	return &api.Operation_TreeEdit_{TreeEdit: pbTreeEdit}, nil
 }
 
