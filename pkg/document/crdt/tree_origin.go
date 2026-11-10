@@ -51,6 +51,86 @@ type TreeInsertOrigin struct {
 	// Left is the start of. Runtime only; a recorded node's parent is its
 	// MergedFrom, or the parent it sits in.
 	parent *TreeNodeID
+
+	// cut marks the origin of an element split with no content: it resolves
+	// to the cut point (see splitCutLeft) rather than to an insertion slot.
+	// Runtime only.
+	cut bool
+
+	// vv is the version vector of a remote edit being placed, nil for a
+	// local one. Runtime only.
+	vv time.VersionVector
+}
+
+// unknownSplitTail returns the children of the split products of parent that
+// the edit did not know about, in order. A split the author had not seen cut
+// the parent after the author's caret had already chosen its place, so for
+// that edit the parent's end is still the end of the last such product.
+func (t *Tree) unknownSplitTail(parent *TreeNode, vv time.VersionVector) []*TreeNode {
+	if len(vv) == 0 || parent.IsText() {
+		return nil
+	}
+	var tail []*TreeNode
+	for id := parent.InsNextID; id != nil; {
+		sib := t.findFloorNode(id)
+		if sib == nil || !sib.id.Equal(id) || sib.IsText() || time.TicketKnown(vv, sib.id.CreatedAt) {
+			break
+		}
+		tail = append(tail, sib.Children(true)...)
+		id = sib.InsNextID
+	}
+	return tail
+}
+
+// splitCutLeft returns the node an element split cuts after: the sibling
+// right before the split's right origin. Every sibling between the split's
+// left boundary and its right origin is concurrent with the split, and the
+// insertions among them were ordered by origin relative to that right
+// origin, so cutting right before it keeps each of them on the side the
+// insert rule puts it on a replica that saw the split first. A right origin
+// that is no longer a child here (the end, or moved by a concurrent split)
+// cuts at the end.
+func (t *Tree) splitCutLeft(
+	parent, left *TreeNode, origin *TreeInsertOrigin,
+) (*TreeNode, resource.DataSize, error) {
+	var diff resource.DataSize
+	children := parent.Children(true)
+	start := 0
+	if left != parent {
+		start = -1
+		for i, c := range children {
+			if c == left {
+				start = i + 1
+				break
+			}
+		}
+		if start < 0 {
+			return left, diff, nil
+		}
+	}
+	rightIdx, children, d, err := t.originRightIn(children, start, origin.Right)
+	diff.Add(d)
+	if err != nil {
+		return nil, diff, err
+	}
+	if left != parent {
+		for i, c := range children {
+			if c == left {
+				start = i + 1
+				break
+			}
+		}
+	}
+	switch {
+	case rightIdx > start:
+		return children[rightIdx-1], diff, nil
+	case rightIdx == start:
+		return left, diff, nil
+	case len(children) > start:
+		return children[len(children)-1], diff, nil
+	default:
+		return left, diff, nil
+	}
 }
 
 func sameTreeBoundary(a, b *TreeNodeID) bool {
@@ -232,6 +312,9 @@ func (t *Tree) integrateTree(
 		return left, diff, nil
 	}
 	if rightIdx < 0 {
+		if tail := t.unknownSplitTail(parent, origin.vv); len(tail) > 0 {
+			children = append(append([]*TreeNode{}, children...), tail...)
+		}
 		return t.integrateTreeOpen(parent, left, children, start, origin, editedAt), diff, nil
 	}
 
@@ -326,6 +409,11 @@ func (t *Tree) integrateTreeOpen(
 			break
 		}
 		o := children[i]
+		if origin.Right != nil && o.id.Equal(origin.Right) {
+			// The scan crossed into a split product and reached the right
+			// origin there: the window ends at it.
+			break
+		}
 		prev = o
 		seen[o] = struct{}{}
 		if o.Origin == nil {
@@ -339,7 +427,7 @@ func (t *Tree) integrateTreeOpen(
 			// or a sibling a concurrent element split moved into the new
 			// element -- bounds nothing here. Two such siblings are equally
 			// open, whichever replica saw the split first, so they tie.
-			if t.rightBoundsIn(parent, o.Origin.Right, origin.Right) {
+			if t.rightBoundsIn(o, o.Origin.Right, origin.Right) {
 				scanning = true
 				continue
 			}
@@ -365,14 +453,15 @@ func isSplitProduct(node *TreeNode) bool {
 	return !node.IsText() && node.InsPrevID != nil
 }
 
-// rightBoundsIn reports whether a sibling's right origin bounds it inside
-// parent when the inserting node's own right origin (mine) does not.
-func (t *Tree) rightBoundsIn(parent *TreeNode, right, mine *TreeNodeID) bool {
+// rightBoundsIn reports whether sibling o's right origin bounds it inside
+// o's own parent when the inserting node's right origin (mine) does not.
+func (t *Tree) rightBoundsIn(o *TreeNode, right, mine *TreeNodeID) bool {
 	if right == nil || (mine != nil && right.Equal(mine)) {
 		return false
 	}
 	node := t.findFloorNode(right)
-	return node != nil && node.Index.Parent != nil && node.Index.Parent.Value == parent
+	return node != nil && node.Index.Parent != nil && o.Index.Parent != nil &&
+		node.Index.Parent == o.Index.Parent
 }
 
 // assignTreeOrigins records origins on inserted content: the first top-level

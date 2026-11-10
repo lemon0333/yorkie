@@ -2228,9 +2228,15 @@ func (t *Tree) EditWithOrigin(
 	var info TreeEditReverseInfo
 
 	var origin *TreeInsertOrigin
-	if rightOrigin != nil && len(contents) > 0 {
+	if rightOrigin != nil && (len(contents) > 0 || splitLevel > 0) {
 		if left, ok := t.canonicalLeft(from); ok {
-			origin = &TreeInsertOrigin{Left: left, Right: rightOrigin.Right, parent: from.ParentID}
+			origin = &TreeInsertOrigin{
+				Left:   left,
+				Right:  rightOrigin.Right,
+				parent: from.ParentID,
+				cut:    len(contents) == 0,
+				vv:     versionVector,
+			}
 		}
 	}
 
@@ -4595,7 +4601,13 @@ func (t *Tree) findTreeNodesWithSplitText(
 				// the target, and its moved children (with MergedFrom naming
 				// it) follow: place among them by origin, as a replica that
 				// saw the insertion before the merge did.
-				dest, d, err := t.integrateTree(mergeTarget, boundary, origin, editedAt)
+				place := t.integrateTree
+				if origin.cut {
+					place = func(p, l *TreeNode, o *TreeInsertOrigin, _ *time.Ticket) (*TreeNode, resource.DataSize, error) {
+						return t.splitCutLeft(p, l, o)
+					}
+				}
+				dest, d, err := place(mergeTarget, boundary, origin, editedAt)
 				diff.Add(d)
 				if err != nil {
 					return nil, nil, diff, err
@@ -4619,10 +4631,20 @@ func (t *Tree) findTreeNodesWithSplitText(
 	// same position concurrently, then we need to find the appropriate left
 	// node. This is similar to RGA.
 	if origin != nil {
-		dest, d, err := t.integrateTree(realParentNode, leftNode, origin, editedAt)
+		place := t.integrateTree
+		if origin.cut {
+			place = func(p, l *TreeNode, o *TreeInsertOrigin, _ *time.Ticket) (*TreeNode, resource.DataSize, error) {
+				return t.splitCutLeft(p, l, o)
+			}
+		}
+		dest, d, err := place(realParentNode, leftNode, origin, editedAt)
 		diff.Add(d)
 		if err != nil {
 			return nil, nil, diff, err
+		}
+		// The scan may have continued into a split product of the parent.
+		if dest != realParentNode && dest.Index.Parent != nil {
+			return dest.Index.Parent.Value, dest, diff, nil
 		}
 		return realParentNode, dest, diff, nil
 	}

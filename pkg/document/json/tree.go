@@ -493,7 +493,7 @@ func (t *Tree) edit(fromPos, toPos *crdt.TreePos, contents []*TreeNode, splitLev
 		return issued
 	}
 	var origin *crdt.TreeInsertOrigin
-	if len(clones) > 0 && crdt.TreeOrigins {
+	if (len(clones) > 0 || splitLevel > 0) && crdt.TreeOrigins {
 		if o, ok := t.Tree.LocalTreeOrigin(fromPos); ok {
 			origin = &crdt.TreeInsertOrigin{Right: o.Right}
 		}
