@@ -256,7 +256,7 @@ func toRGANodes(rgaNodes []*crdt.RGATreeListNode) ([]*api.RGANode, error) {
 
 func toTextNodes(textNodes []*crdt.RGATreeSplitNode[*crdt.TextValue]) []*api.TextNode {
 	var pbTextNodes []*api.TextNode
-	for _, textNode := range textNodes {
+	for i, textNode := range textNodes {
 		value := textNode.Value()
 
 		attrs := make(map[string]*api.NodeAttr)
@@ -278,10 +278,52 @@ func toTextNodes(textNodes []*crdt.RGATreeSplitNode[*crdt.TextValue]) []*api.Tex
 		if textNode.InsPrevID() != nil {
 			pbTextNode.InsPrevId = toTextNodeID(textNode.InsPrevID())
 		}
+		if o := textNode.Origin(); o != nil {
+			pbTextNode.HasOrigin = true
+			switch {
+			case o.Left.Equal(textNode.ID()):
+				pbTextNode.OriginFlags |= originLeftSelf
+			case i > 0 && o.Left.Equal(endOf(textNodes[i-1])):
+				pbTextNode.OriginFlags |= originLeftPrev
+			default:
+				pbTextNode.OriginLeft = toTextNodeID(o.Left)
+			}
+			if o.Right != nil {
+				if i+1 < len(textNodes) && o.Right.Equal(textNodes[i+1].ID()) {
+					pbTextNode.OriginFlags |= originRightNext
+				} else if po := prevOrigin(textNodes, i); po != nil && po.Right != nil && o.Right.Equal(po.Right) {
+					pbTextNode.OriginFlags |= originRightPrev
+				} else {
+					pbTextNode.OriginRight = toTextNodeID(o.Right)
+				}
+			}
+		}
 
 		pbTextNodes = append(pbTextNodes, pbTextNode)
 	}
 	return pbTextNodes
+}
+
+// Origin flags of a snapshot TextNode, for origins that are its neighbours.
+const (
+	originLeftPrev  uint32 = 1
+	originLeftSelf  uint32 = 2
+	originRightNext uint32 = 4
+	originRightPrev uint32 = 8
+)
+
+func prevOrigin(nodes []*crdt.RGATreeSplitNode[*crdt.TextValue], i int) *crdt.InsertOrigin {
+	if i == 0 {
+		return nil
+	}
+	return nodes[i-1].Origin()
+}
+
+// endOf is the boundary after the last character of node, in the absolute
+// form an insertion's left origin uses.
+func endOf(node *crdt.RGATreeSplitNode[*crdt.TextValue]) *crdt.RGATreeSplitNodeID {
+	id := node.ID()
+	return crdt.NewRGATreeSplitNodeID(id.CreatedAt(), id.Offset()+node.Value().Len())
 }
 
 func toTextNodeID(id *crdt.RGATreeSplitNodeID) *api.TextNodeID {

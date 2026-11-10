@@ -413,6 +413,32 @@ func (t *Text) Edit(
 	executedAt *time.Ticket,
 	versionVector time.VersionVector,
 ) (*RGATreeSplitNodePos, []GCPair, resource.DataSize, []string, []RestoreSpan, error) {
+	return t.EditWithOrigin(from, to, content, attributes, executedAt, versionVector, InsertOrigin{}, false)
+}
+
+// LocalOrigin returns the origin a local insert at pos records: the
+// absolute boundary of pos and the ID of the character right of it.
+func (t *Text) LocalOrigin(pos *RGATreeSplitNodePos) (InsertOrigin, error) {
+	left := pos.getAbsoluteID()
+	right, err := t.rgaTreeSplit.RightOriginOf(left)
+	if err != nil {
+		return InsertOrigin{}, err
+	}
+	return InsertOrigin{Left: left, Right: right}, nil
+}
+
+// EditWithOrigin is Edit with the insertion's origins. A zero origin keeps
+// the createdAt-only placement rule.
+func (t *Text) EditWithOrigin(
+	from,
+	to *RGATreeSplitNodePos,
+	content string,
+	attributes map[string]string,
+	executedAt *time.Ticket,
+	versionVector time.VersionVector,
+	origin InsertOrigin,
+	local bool,
+) (*RGATreeSplitNodePos, []GCPair, resource.DataSize, []string, []RestoreSpan, error) {
 	val := NewTextValue(content, NewRHT())
 	for key, value := range attributes {
 		val.attrs.Set(key, value, executedAt)
@@ -424,6 +450,8 @@ func (t *Text) Edit(
 		val,
 		executedAt,
 		versionVector,
+		origin,
+		local,
 	)
 	if err != nil {
 		return caretPos, pairs, diff, nil, nil, err

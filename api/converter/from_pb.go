@@ -604,14 +604,33 @@ func fromEdit(pbEdit *api.Operation_Edit) (*operations.Edit, error) {
 			retombstoneSpans,
 		), nil
 	}
-	return operations.NewEdit(
+	edit := operations.NewEdit(
 		parentCreatedAt,
 		from,
 		to,
 		pbEdit.Content,
 		pbEdit.Attributes,
 		executedAt,
-	), nil
+	)
+	if pbEdit.HasOrigin {
+		fromAbs := crdt.NewRGATreeSplitNodeID(from.ID().CreatedAt(), from.ID().Offset()+from.RelativeOffset())
+		left, err := fromTextNodeID(pbEdit.OriginLeft)
+		if err != nil {
+			return nil, err
+		}
+		if left == nil {
+			left = fromAbs
+		}
+		right, err := fromTextNodeID(pbEdit.OriginRight)
+		if err != nil {
+			return nil, err
+		}
+		if pbEdit.OriginRightAtFrom {
+			right = fromAbs
+		}
+		edit.SetOrigin(crdt.InsertOrigin{Left: left, Right: right})
+	}
+	return edit, nil
 }
 
 func fromRestoreSpans(pbSpans []*api.RestoreSpan) ([]*crdt.RestoreSpan, error) {

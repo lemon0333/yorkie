@@ -444,8 +444,7 @@ func toEdit(e *operations.Edit) (*api.Operation_Edit_, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &api.Operation_Edit_{
-		Edit: &api.Operation_Edit{
+	pbEdit := &api.Operation_Edit{
 			ParentCreatedAt:  ToTimeTicket(e.ParentCreatedAt()),
 			From:             toTextNodePos(e.From()),
 			To:               toTextNodePos(e.To()),
@@ -455,8 +454,23 @@ func toEdit(e *operations.Edit) (*api.Operation_Edit_, error) {
 			RestoreSpans:     restoreSpans,
 			RestoreMode:      toRestoreMode(e.RestoreMode()),
 			RetombstoneSpans: retombstoneSpans,
-		},
-	}, nil
+	}
+	if o := e.Origin(); o.Left != nil {
+		pbEdit.HasOrigin = true
+		from := e.From()
+		fromAbs := crdt.NewRGATreeSplitNodeID(from.ID().CreatedAt(), from.ID().Offset()+from.RelativeOffset())
+		if !o.Left.Equal(fromAbs) {
+			pbEdit.OriginLeft = toTextNodeID(o.Left)
+		}
+		if o.Right != nil {
+			if o.Right.Equal(fromAbs) {
+				pbEdit.OriginRightAtFrom = true
+			} else {
+				pbEdit.OriginRight = toTextNodeID(o.Right)
+			}
+		}
+	}
+	return &api.Operation_Edit_{Edit: pbEdit}, nil
 }
 
 func toRestoreSpans(spans []*crdt.RestoreSpan) ([]*api.RestoreSpan, error) {

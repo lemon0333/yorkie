@@ -670,6 +670,11 @@ func (r *Root) collect(vector time.VersionVector) (int, int, error) {
 			}
 		}
 
+		if parent, ok := pair.Parent.(GCPin); ok && parent.IsPinned(pair.Child) {
+			deferred++
+			continue
+		}
+
 		if err := pair.Parent.Purge(pair.Child); err != nil {
 			return 0, 0, err
 		}

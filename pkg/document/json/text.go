@@ -25,6 +25,10 @@ import (
 	"github.com/yorkie-team/yorkie/pkg/document/yson"
 )
 
+// RecordInsertOrigins switches insertion origins on local inserts.
+// Experimental: off simulates a client that predates origins.
+var RecordInsertOrigins = true
+
 // Text represents a text in the document. As a proxy for the CRDT
 // text, it is used when the user manipulates the rich text from the outside.
 type Text struct {
@@ -75,14 +79,24 @@ func (p *Text) Edit(
 		attrs = attributes[0]
 	}
 
+	var origin crdt.InsertOrigin
+	if len(content) > 0 && RecordInsertOrigins {
+		origin, err = p.Text.LocalOrigin(fromPos)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	ticket := p.context.IssueTimeTicket()
-	_, pairs, diff, _, _, err := p.Text.Edit(
+	_, pairs, diff, _, _, err := p.Text.EditWithOrigin(
 		fromPos,
 		toPos,
 		content,
 		attrs,
 		ticket,
 		nil,
+		origin,
+		true,
 	)
 	if err != nil {
 		panic(err)
@@ -94,14 +108,16 @@ func (p *Text) Edit(
 
 	p.context.Acc(diff)
 
-	p.context.Push(operations.NewEdit(
+	op := operations.NewEdit(
 		p.CreatedAt(),
 		fromPos,
 		toPos,
 		content,
 		attrs,
 		ticket,
-	))
+	)
+	op.SetOrigin(origin)
+	p.context.Push(op)
 
 	return p
 }

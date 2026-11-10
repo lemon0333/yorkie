@@ -238,6 +238,24 @@ type RGATreeSplitNode[V RGATreeSplitValue] struct {
 	next    *RGATreeSplitNode[V]
 	insPrev *RGATreeSplitNode[V]
 	insNext *RGATreeSplitNode[V]
+
+	// origin is the insertion context recorded when this node was inserted:
+	// the boundary it was inserted after (left) and the character that was to
+	// its right (right). origin.Left is nil for nodes created without one
+	// (legacy edits, restores, snapshots), which fall back to the
+	// createdAt-only RGA rule. Stored inline to avoid an allocation per
+	// insert. The IDs it points at are shared, not copied (DeepCopy shares
+	// them too), so an origin is never mutated after it is set.
+	origin InsertOrigin
+}
+
+// InsertOrigin is the context an insertion was made in. Left is the
+// position boundary the content was inserted after, in the same absolute form
+// findFloorNodePreferToLeft resolves. Right is the ID of the character that
+// was immediately to the right of the caret, or nil at the end of the text.
+type InsertOrigin struct {
+	Left  *RGATreeSplitNodeID
+	Right *RGATreeSplitNodeID
 }
 
 // NewRGATreeSplitNode creates a new instance of RGATreeSplit.
@@ -260,6 +278,20 @@ func (s *RGATreeSplitNode[V]) ID() *RGATreeSplitNodeID {
 func (s *RGATreeSplitNode[V]) IDString() string {
 	return s.id.key()
 }
+
+// Origin returns the insertion context of this node, or nil.
+func (s *RGATreeSplitNode[V]) Origin() *InsertOrigin {
+	if s.origin.Left == nil {
+		return nil
+	}
+	return &s.origin
+}
+
+// RawOrigin returns the insertion context as stored, possibly incomplete.
+func (s *RGATreeSplitNode[V]) RawOrigin() InsertOrigin { return s.origin }
+
+// SetOrigin sets the insertion context of this node.
+func (s *RGATreeSplitNode[V]) SetOrigin(origin InsertOrigin) { s.origin = origin }
 
 // InsPrevID returns previous node ID at the time of this node insertion.
 func (s *RGATreeSplitNode[V]) InsPrevID() *RGATreeSplitNodeID {
@@ -323,6 +355,7 @@ func (s *RGATreeSplitNode[V]) DeepCopy() *RGATreeSplitNode[V] {
 		id:        s.id,
 		value:     s.value.DeepCopy().(V),
 		removedAt: s.removedAt,
+		origin:    s.origin,
 	}
 	node.indexNode = splay.NewNode(node)
 
@@ -346,6 +379,12 @@ func (s *RGATreeSplitNode[V]) split(offset int) *RGATreeSplitNode[V] {
 		s.value.Split(offset).(V),
 	)
 	newNode.removedAt = s.removedAt
+	if s.origin.Left != nil {
+		// The right piece continues the same insertion: its left origin is
+		// the last character of the left piece (resolved through insPrev),
+		// and it shares the original right origin.
+		newNode.origin = InsertOrigin{Left: newNode.id, Right: s.origin.Right}
+	}
 	return newNode
 }
 
@@ -427,6 +466,19 @@ type RGATreeSplit[V RGATreeSplitValue] struct {
 	// otherwise never be registered for GC. edit, Text.Style and
 	// Text.RemoveStyle drain this buffer into the GC pairs they return.
 	pendingGCPairs []GCPair
+
+	// scanOrder is scratch space for integrate, reused across inserts.
+	scanOrder map[*RGATreeSplitNode[V]]int
+
+	// windowSet is scratch space for RightOriginOf: the tombstones between
+	// a boundary and the next live character.
+	windowSet map[*RGATreeSplitNode[V]]struct{}
+
+	// originRefs counts, per insertion (createdAt key), how many nodes name
+	// a character of it as a left or right origin. integrate resolves the
+	// origins of nodes already in the list, so a referenced insertion must
+	// not be purged. Built lazily (nil = stale) and kept current by Purge.
+	originRefs map[string]int
 }
 
 // NewRGATreeSplit creates a new instance of RGATreeSplit.
@@ -493,6 +545,317 @@ func (s *RGATreeSplit[V]) findNodeWithSplit(
 	}
 
 	return node, node.next, diff, nil
+}
+
+// Experiment switches (not for production).
+var (
+	// RightImmediate records the immediate next node (tombstones included)
+	// as the right origin, and recovers a purged one from the change's
+	// version vector at the receiver. Off records the next live character.
+	RightImmediate = false
+	// ConditionalRight records a right origin only when the right
+	// neighbour was inserted at the same boundary (a sibling).
+	ConditionalRight = false
+	// LeftByID compares left origins by their canonical boundary ID and
+	// treats a left origin whose node was purged as "before the window",
+	// so left origins pin nothing for GC.
+	LeftByID = false
+)
+
+// resolveLeft resolves a scanned node's left origin. A boundary equal to the
+// inserting node's own is answered without a lookup. Under LeftByID a
+// purged boundary resolves to nil, which every caller reads as "outside the
+// window".
+func (s *RGATreeSplit[V]) resolveLeft(
+	id, mine *RGATreeSplitNodeID,
+	left *RGATreeSplitNode[V],
+) (*RGATreeSplitNode[V], error) {
+	if sameBoundary(id, mine) {
+		return left, nil
+	}
+	n, err := s.findFloorNodePreferToLeft(id)
+	if err != nil {
+		if LeftByID {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return n, nil
+}
+
+// RightOriginOf returns the right origin a local insert at the given
+// boundary records, or nil (end of text, or no constraint under
+// ConditionalRight).
+func (s *RGATreeSplit[V]) RightOriginOf(absoluteID *RGATreeSplitNodeID) (*RGATreeSplitNodeID, error) {
+	node, err := s.findFloorNodePreferToLeft(absoluteID)
+	if err != nil {
+		return nil, err
+	}
+	relativeOffset := absoluteID.offset - node.id.offset
+	if relativeOffset < node.contentLen() {
+		// Inside one insertion: the right neighbour continues it, which is
+		// always a sibling at this boundary.
+		return NewRGATreeSplitNodeID(node.id.createdAt, absoluteID.offset), nil
+	}
+	next := node.next
+	if ConditionalRight {
+		if s.windowSet == nil {
+			s.windowSet = make(map[*RGATreeSplitNode[V]]struct{})
+		}
+		clear(s.windowSet)
+	}
+	if !RightImmediate {
+		for next != nil && next.removedAt != nil {
+			if ConditionalRight {
+				s.windowSet[next] = struct{}{}
+			}
+			next = next.next
+		}
+	}
+	if next == nil {
+		return nil, nil
+	}
+	if ConditionalRight && !s.descendsFrom(next, absoluteID) {
+		return nil, nil
+	}
+	return next.id, nil
+}
+
+// descendsFrom reports whether r hangs, directly or through nodes between
+// left and r, off the boundary at the end of left (Fugue's "is the right
+// neighbour a descendant of the left one"). Only nodes strictly between left
+// and r can be intermediate ancestors; an ancestor anywhere else means r
+// belongs to an earlier insertion point.
+func (s *RGATreeSplit[V]) descendsFrom(r *RGATreeSplitNode[V], boundary *RGATreeSplitNodeID) bool {
+	for cur := r; ; {
+		o := cur.origin.Left
+		if o == nil {
+			return false
+		}
+		if sameBoundary(o, boundary) {
+			return true
+		}
+		parent, err := s.findFloorNodePreferToLeft(o)
+		if err != nil || parent == cur {
+			return false
+		}
+		if _, between := s.windowSet[parent]; !between {
+			return false
+		}
+		cur = parent
+	}
+}
+
+// sameBoundary reports whether two left origins name the same boundary.
+// Boundaries are canonical: "after character (C, k)" is always (C, k+1).
+func sameBoundary(a, b *RGATreeSplitNodeID) bool {
+	return a != nil && b != nil && a.offset == b.offset && a.createdAt.Compare(b.createdAt) == 0
+}
+
+// integrate returns the node a new insertion goes after, using both origins
+// (the YjsMod / FugueMax rule). left is the piece ending at the insertion
+// boundary; right is the piece starting at the right origin. Only nodes
+// between the two can be concurrent with the insertion, so the scan is
+// bounded by that window and is empty when nothing was inserted there
+// concurrently.
+func (s *RGATreeSplit[V]) integrate(
+	origin InsertOrigin,
+	editedAt *time.Ticket,
+	vv time.VersionVector,
+) (*RGATreeSplitNode[V], error) {
+	left, err := s.findFloorNodePreferToLeft(origin.Left)
+	if err != nil {
+		return nil, err
+	}
+	right, err := s.originRightNode(origin.Right)
+	if err != nil {
+		if !RightImmediate || vv == nil {
+			return nil, err
+		}
+		// The right origin was purged. It was the first node after left
+		// that the author knew; every node between them is concurrent. So
+		// the first node after left that the change's version vector
+		// covers is the same boundary.
+		right = left.next
+		for right != nil && !vv.EqualToOrAfter(right.createdAt()) {
+			right = right.next
+		}
+	}
+	if left.next == right && right != nil {
+		return left, nil
+	}
+	if origin.Right == nil && right == nil {
+		return s.integrateOpen(left, origin, editedAt)
+	}
+
+	// Order of the nodes in the window (left, right]. A right origin that is
+	// not in it lies past right. The map is reused across inserts.
+	if s.scanOrder == nil {
+		s.scanOrder = make(map[*RGATreeSplitNode[V]]int)
+	}
+	order := s.scanOrder
+	clear(order)
+	order[left] = 0
+	i := 1
+	for n := left.next; n != nil && n != right; n = n.next {
+		order[n] = i
+		i++
+	}
+	rightIdx := i
+	if right != nil {
+		order[right] = rightIdx
+	}
+	compareRight := func(n *RGATreeSplitNode[V]) int {
+		if n == right {
+			return 0
+		}
+		if idx, ok := order[n]; ok && n != nil {
+			if idx < rightIdx {
+				return -1
+			}
+			return 0
+		}
+		return 1
+	}
+
+	dest := left
+	prev := left
+	scanning := false
+	for o := left.next; ; o = o.next {
+		if !scanning {
+			dest = prev
+		}
+		if o == nil || o == right {
+			break
+		}
+		prev = o
+		if o.origin.Left == nil {
+			break
+		}
+		oleft, err := s.resolveLeft(o.origin.Left, origin.Left, left)
+		if err != nil {
+			return nil, err
+		}
+		if oleft == left {
+			oright, err := s.originRightNode(o.origin.Right)
+			if err != nil {
+				return nil, err
+			}
+			switch cmp := compareRight(oright); {
+			case cmp < 0:
+				scanning = true
+			case cmp == 0:
+				if editedAt.ActorID().Compare(o.createdAt().ActorID()) < 0 {
+					return dest, nil
+				}
+				scanning = false
+			default:
+				scanning = false
+			}
+			continue
+		}
+		if _, inWindow := order[oleft]; !inWindow {
+			// oleft < left: o belongs to an earlier insertion point.
+			break
+		}
+		// oleft > left: o hangs off something inside the window; skip it.
+	}
+	return dest, nil
+}
+
+// integrateOpen places an insertion that has no right origin. It scans
+// forward from left while nodes hang off this boundary or off nodes already
+// scanned, and orders siblings that also have no right origin by actor; a
+// sibling with a right origin is treated as tighter-bound and skipped past.
+func (s *RGATreeSplit[V]) integrateOpen(
+	left *RGATreeSplitNode[V],
+	origin InsertOrigin,
+	editedAt *time.Ticket,
+) (*RGATreeSplitNode[V], error) {
+	if s.scanOrder == nil {
+		s.scanOrder = make(map[*RGATreeSplitNode[V]]int)
+	}
+	seen := s.scanOrder
+	clear(seen)
+	seen[left] = 0
+	dest, prev := left, left
+	scanning := false
+	for o := left.next; ; o = o.next {
+		if !scanning {
+			dest = prev
+		}
+		if o == nil {
+			break
+		}
+		prev = o
+		seen[o] = 1
+		if o.origin.Left == nil {
+			break
+		}
+		oleft, err := s.resolveLeft(o.origin.Left, origin.Left, left)
+		if err != nil {
+			return nil, err
+		}
+		if oleft == left {
+			if o.origin.Right != nil {
+				// o is bound before some node; it sits closer to left.
+				scanning = true
+				continue
+			}
+			if editedAt.ActorID().Compare(o.createdAt().ActorID()) < 0 {
+				return dest, nil
+			}
+			scanning = false
+			continue
+		}
+		if _, ok := seen[oleft]; !ok {
+			break
+		}
+	}
+	return dest, nil
+}
+
+// isUncontested reports, without any index lookup, whether the insertion
+// point found by findNodeWithSplit is already the left origin with the
+// right origin directly after it. That is the case for every local insert
+// and for any remote insert nothing was inserted next to concurrently, and
+// there the two-origin rule has nothing to decide.
+func (s *RGATreeSplit[V]) isUncontested(
+	left, right *RGATreeSplitNode[V],
+	origin InsertOrigin,
+	local bool,
+) bool {
+	if left.id.createdAt.Compare(origin.Left.createdAt) != 0 ||
+		left.id.offset+left.contentLen() != origin.Left.offset {
+		return false
+	}
+	if origin.Right == nil {
+		// No right constraint: the scan stops at the first node that does
+		// not hang off this boundary. If the node right after the boundary
+		// is not a sibling, that is where it stops.
+		return right == nil || right.origin.Left == nil || !sameBoundary(right.origin.Left, origin.Left)
+	}
+	if right == nil {
+		return false
+	}
+	return right.id.Equal(origin.Right)
+}
+
+// originRightNode returns the piece starting at the given right origin,
+// splitting a piece if needed; nil means the end of the text.
+func (s *RGATreeSplit[V]) originRightNode(id *RGATreeSplitNodeID) (*RGATreeSplitNode[V], error) {
+	if id == nil {
+		return nil, nil
+	}
+	node := s.findFloorNode(id)
+	if node == nil {
+		return nil, fmt.Errorf("right origin not found: %s", id.ToTestString())
+	}
+	if node.id.offset == id.offset {
+		return node, nil
+	}
+	split, _, err := s.splitNode(node, id.offset-node.id.offset)
+	return split, err
 }
 
 func (s *RGATreeSplit[V]) findFloorNodePreferToLeft(id *RGATreeSplitNodeID) (*RGATreeSplitNode[V], error) {
@@ -658,8 +1021,43 @@ func (s *RGATreeSplit[V]) drainPendingGCPairs() []GCPair {
 	return pairs
 }
 
+// originRefKeys returns the insertions a node's origin references, other
+// than its own (a split continuation names its own insertion).
+func originRefKeys[V RGATreeSplitValue](node *RGATreeSplitNode[V], fn func(string)) {
+	o := node.origin
+	if o.Left == nil {
+		return
+	}
+	own := node.id.createdAt
+	if !LeftByID && o.Left.createdAt.Compare(own) != 0 {
+		fn(o.Left.createdAt.Key())
+	}
+	if o.Right != nil && o.Right.createdAt.Compare(own) != 0 {
+		fn(o.Right.createdAt.Key())
+	}
+}
+
+// IsPinned implements GCPin: a node is pinned while another node's origin
+// references its insertion.
+func (s *RGATreeSplit[V]) IsPinned(child GCChild) bool {
+	node, ok := child.(*RGATreeSplitNode[V])
+	if !ok {
+		return false
+	}
+	if s.originRefs == nil {
+		s.originRefs = make(map[string]int)
+		for n := s.initialHead; n != nil; n = n.next {
+			originRefKeys(n, func(k string) { s.originRefs[k]++ })
+		}
+	}
+	return s.originRefs[node.id.createdAt.Key()] > 0
+}
+
 // InsertAfter inserts the given node after the given previous node.
 func (s *RGATreeSplit[V]) InsertAfter(prev, node *RGATreeSplitNode[V]) *RGATreeSplitNode[V] {
+	if s.originRefs != nil {
+		originRefKeys(node, func(k string) { s.originRefs[k]++ })
+	}
 	next := prev.next
 	node.setPrev(prev)
 	if next != nil {
@@ -670,6 +1068,11 @@ func (s *RGATreeSplit[V]) InsertAfter(prev, node *RGATreeSplitNode[V]) *RGATreeS
 	s.treeByIndex.InsertAfter(prev.indexNode, node.indexNode)
 
 	return node
+}
+
+// NextOf returns the node after the given node in the list, or nil.
+func (s *RGATreeSplit[V]) NextOf(node *RGATreeSplitNode[V]) *RGATreeSplitNode[V] {
+	return node.next
 }
 
 // InitialHead returns the head node of this RGATreeSplit.
@@ -716,6 +1119,8 @@ func (s *RGATreeSplit[V]) edit(
 	content V,
 	editedAt *time.Ticket,
 	versionVector time.VersionVector,
+	origin InsertOrigin,
+	local bool,
 ) (*RGATreeSplitNodePos, []GCPair, resource.DataSize, []restoreSpanValue[V], error) {
 	var diff resource.DataSize
 
@@ -747,7 +1152,16 @@ func (s *RGATreeSplit[V]) edit(
 
 	// 03. insert a new node
 	if content.Len() > 0 {
-		inserted := s.InsertAfter(fromLeft, NewRGATreeSplitNode(NewRGATreeSplitNodeID(editedAt, 0), content))
+		insertAfter := fromLeft
+		if origin.Left != nil && !s.isUncontested(fromLeft, fromRight, origin, local) {
+			insertAfter, err = s.integrate(origin, editedAt, versionVector)
+			if err != nil {
+				return nil, s.drainPendingGCPairs(), diff, nil, err
+			}
+		}
+		node := NewRGATreeSplitNode(NewRGATreeSplitNodeID(editedAt, 0), content)
+		node.origin = origin
+		inserted := s.InsertAfter(insertAfter, node)
 		diff.Add(inserted.DataSize())
 
 		caretPos = NewRGATreeSplitNodePos(inserted.id, inserted.contentLen())
@@ -1193,6 +1607,9 @@ func (s *RGATreeSplit[V]) PurgeBarrierAt(child GCChild) *time.Ticket {
 
 func (s *RGATreeSplit[V]) Purge(child GCChild) error {
 	node := child.(*RGATreeSplitNode[V])
+	if s.originRefs != nil {
+		originRefKeys(node, func(k string) { s.originRefs[k]-- })
+	}
 
 	s.treeByIndex.Delete(node.indexNode)
 	s.treeByID.Remove(node.id)
