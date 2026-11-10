@@ -46,6 +46,11 @@ var TreeSkeletonGC = true
 type TreeInsertOrigin struct {
 	Left  *TreeNodeID
 	Right *TreeNodeID
+
+	// parent is the declared parent of an insertion being placed: what a nil
+	// Left is the start of. Runtime only; a recorded node's parent is its
+	// MergedFrom, or the parent it sits in.
+	parent *TreeNodeID
 }
 
 func sameTreeBoundary(a, b *TreeNodeID) bool {
@@ -53,6 +58,25 @@ func sameTreeBoundary(a, b *TreeNodeID) bool {
 		return a == nil && b == nil
 	}
 	return a.Equal(b)
+}
+
+// sameLeft reports whether sibling o was inserted at the same left boundary
+// as the insertion being placed. "The start of a parent" names a parent: a
+// merge moves a parent's children into another one, so two nil lefts only
+// match when they are the start of the same parent -- o's MergedFrom when a
+// merge moved it here, otherwise the parent it sits in.
+func sameLeft(o *TreeNode, parent *TreeNode, origin *TreeInsertOrigin) bool {
+	if o.Origin.Left != nil || origin.Left != nil {
+		return sameTreeBoundary(o.Origin.Left, origin.Left)
+	}
+	if origin.parent == nil {
+		return true
+	}
+	own := parent.id
+	if o.MergedFrom != nil {
+		own = o.MergedFrom
+	}
+	return own.Equal(origin.parent)
 }
 
 // boundaryAfter is the canonical boundary right after node.
@@ -257,7 +281,7 @@ func (t *Tree) integrateTree(
 			}
 			break
 		}
-		if sameTreeBoundary(o.Origin.Left, origin.Left) {
+		if sameLeft(o, parent, origin) {
 			switch cmp := compareRight(o.Origin.Right); {
 			case cmp < 0:
 				scanning = true
@@ -310,7 +334,7 @@ func (t *Tree) integrateTreeOpen(
 			}
 			break
 		}
-		if sameTreeBoundary(o.Origin.Left, origin.Left) {
+		if sameLeft(o, parent, origin) {
 			// A right origin that is not a child of this parent -- the end,
 			// or a sibling a concurrent element split moved into the new
 			// element -- bounds nothing here. Two such siblings are equally

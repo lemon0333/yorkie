@@ -2230,7 +2230,7 @@ func (t *Tree) EditWithOrigin(
 	var origin *TreeInsertOrigin
 	if rightOrigin != nil && len(contents) > 0 {
 		if left, ok := t.canonicalLeft(from); ok {
-			origin = &TreeInsertOrigin{Left: left, Right: rightOrigin.Right}
+			origin = &TreeInsertOrigin{Left: left, Right: rightOrigin.Right, parent: from.ParentID}
 		}
 	}
 
@@ -4579,18 +4579,30 @@ func (t *Tree) findTreeNodesWithSplitText(
 		mergeTarget := t.findMergeNode(realParentNode.mergedInto)
 		if mergeTarget != nil && !mergeTarget.IsRemoved() {
 			targetChildren := mergeTarget.Index.Children(true)
+			boundary := mergeTarget
 			for i, targetChild := range targetChildren {
 				if targetChild.Value.MergedFrom == nil ||
 					!targetChild.Value.MergedFrom.Equal(realParentNode.id) {
 					continue
 				}
-				if i == 0 {
-					return mergeTarget, mergeTarget, diff, nil
+				if i > 0 {
+					boundary = targetChildren[i-1].Value
 				}
-				return mergeTarget, targetChildren[i-1].Value, diff, nil
+				break
 			}
-			// Fallback: insert at leftmost of merge target.
-			return mergeTarget, mergeTarget, diff, nil
+			if origin != nil {
+				// The merged-away parent's start is now this boundary inside
+				// the target, and its moved children (with MergedFrom naming
+				// it) follow: place among them by origin, as a replica that
+				// saw the insertion before the merge did.
+				dest, d, err := t.integrateTree(mergeTarget, boundary, origin, editedAt)
+				diff.Add(d)
+				if err != nil {
+					return nil, nil, diff, err
+				}
+				return mergeTarget, dest, diff, nil
+			}
+			return mergeTarget, boundary, diff, nil
 		}
 	}
 
