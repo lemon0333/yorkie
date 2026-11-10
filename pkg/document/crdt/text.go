@@ -68,6 +68,28 @@ func (t *TextValue) Len() int {
 	return length
 }
 
+// LenGreaterThan reports whether Len() > n. It answers from the byte length
+// when it can, since a UTF-16 length is at most the byte length and at least
+// a third of it, and otherwise stops counting as soon as it passes n. Caret
+// checks on long pieces use it so they don't pay a full count per edit.
+func (t *TextValue) LenGreaterThan(n int) bool {
+	b := len(t.value)
+	if b <= n {
+		return false
+	}
+	if b/3 > n {
+		return true
+	}
+	length := 0
+	for _, r := range t.value {
+		length += max(utf16.RuneLen(r), 1)
+		if length > n {
+			return true
+		}
+	}
+	return false
+}
+
 // String returns the string representation of this value.
 func (t *TextValue) String() string {
 	return t.value

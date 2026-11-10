@@ -306,6 +306,15 @@ func (s *RGATreeSplitNode[V]) contentLen() int {
 	return s.value.Len()
 }
 
+// contentLenGreaterThan reports whether contentLen() > n, without a full
+// count when the value can answer from its size.
+func (s *RGATreeSplitNode[V]) contentLenGreaterThan(n int) bool {
+	if v, ok := any(s.value).(interface{ LenGreaterThan(int) bool }); ok {
+		return v.LenGreaterThan(n)
+	}
+	return s.value.Len() > n
+}
+
 // Len returns the length of this node.
 func (s *RGATreeSplitNode[V]) Len() int {
 	if s.removedAt != nil {
@@ -469,6 +478,10 @@ type RGATreeSplit[V RGATreeSplitValue] struct {
 
 	// scanOrder is scratch space for integrate, reused across inserts.
 	scanOrder map[*RGATreeSplitNode[V]]int
+	// scanByID maps the start ID of each piece in the integrate window to
+	// its order, so siblings' right origins inside the window resolve
+	// without an index lookup. Reused across inserts.
+	scanByID map[pieceKey]int
 
 	// windowSet is scratch space for RightOriginOf: the tombstones between
 	// a boundary and the next live character.
@@ -527,24 +540,37 @@ func (s *RGATreeSplit[V]) findNodeWithSplit(
 	pos *RGATreeSplitNodePos,
 	updatedAt *time.Ticket,
 ) (*RGATreeSplitNode[V], *RGATreeSplitNode[V], resource.DataSize, error) {
+	left, right, diff, _, err := s.findNodeWithSplitAt(pos, updatedAt)
+	return left, right, diff, err
+}
+
+// findNodeWithSplitAt is findNodeWithSplit that also reports whether the
+// returned left node is the one ending exactly at pos, i.e. the createdAt
+// skip loop did not move past any node.
+func (s *RGATreeSplit[V]) findNodeWithSplitAt(
+	pos *RGATreeSplitNodePos,
+	updatedAt *time.Ticket,
+) (*RGATreeSplitNode[V], *RGATreeSplitNode[V], resource.DataSize, bool, error) {
 	absoluteID := pos.getAbsoluteID()
 	node, err := s.findFloorNodePreferToLeft(absoluteID)
 	if err != nil {
-		return nil, nil, resource.DataSize{}, err
+		return nil, nil, resource.DataSize{}, false, err
 	}
 
 	relativeOffset := absoluteID.offset - node.id.offset
 
 	_, diff, err := s.splitNode(node, relativeOffset)
 	if err != nil {
-		return nil, nil, resource.DataSize{}, err
+		return nil, nil, resource.DataSize{}, false, err
 	}
 
+	atBoundary := true
 	for node.next != nil && node.next.createdAt().After(updatedAt) {
 		node = node.next
+		atBoundary = false
 	}
 
-	return node, node.next, diff, nil
+	return node, node.next, diff, atBoundary, nil
 }
 
 // Experiment switches (not for production).
@@ -592,7 +618,7 @@ func (s *RGATreeSplit[V]) RightOriginOf(absoluteID *RGATreeSplitNodeID) (*RGATre
 		return nil, err
 	}
 	relativeOffset := absoluteID.offset - node.id.offset
-	if relativeOffset < node.contentLen() {
+	if node.contentLenGreaterThan(relativeOffset) {
 		// Inside one insertion: the right neighbour continues it, which is
 		// always a sibling at this boundary.
 		return NewRGATreeSplitNodeID(node.id.createdAt, absoluteID.offset), nil
@@ -668,6 +694,7 @@ func (s *RGATreeSplit[V]) integrate(
 		return nil, err
 	}
 	right, err := s.originRightNode(origin.Right)
+	rightResolved := err == nil
 	if err != nil {
 		if !RightImmediate || vv == nil {
 			return nil, err
@@ -695,10 +722,16 @@ func (s *RGATreeSplit[V]) integrate(
 	}
 	order := s.scanOrder
 	clear(order)
+	if s.scanByID == nil {
+		s.scanByID = make(map[pieceKey]int)
+	}
+	byID := s.scanByID
+	clear(byID)
 	order[left] = 0
 	i := 1
 	for n := left.next; n != nil && n != right; n = n.next {
 		order[n] = i
+		byID[pieceKeyOf(n.id)] = i
 		i++
 	}
 	rightIdx := i
@@ -737,11 +770,24 @@ func (s *RGATreeSplit[V]) integrate(
 			return nil, err
 		}
 		if oleft == left {
-			oright, err := s.originRightNode(o.origin.Right)
-			if err != nil {
-				return nil, err
+			// Siblings typed against the same right neighbour share the
+			// right origin, and a right origin that starts a piece inside
+			// the window is in byID; answer both without an index lookup.
+			var cmp int
+			if rightResolved && o.origin.Right != nil && origin.Right != nil && o.origin.Right.Equal(origin.Right) {
+				cmp = 0
+			} else if idx, ok := byID[pieceKeyOf0(o.origin.Right)]; ok && o.origin.Right != nil {
+				if idx < rightIdx {
+					cmp = -1
+				}
+			} else {
+				oright, err := s.originRightNode(o.origin.Right)
+				if err != nil {
+					return nil, err
+				}
+				cmp = compareRight(oright)
 			}
-			switch cmp := compareRight(oright); {
+			switch {
 			case cmp < 0:
 				scanning = true
 			case cmp == 0:
@@ -823,10 +869,10 @@ func (s *RGATreeSplit[V]) integrateOpen(
 func (s *RGATreeSplit[V]) isUncontested(
 	left, right *RGATreeSplitNode[V],
 	origin InsertOrigin,
-	local bool,
+	leftIsOrigin bool,
 ) bool {
-	if left.id.createdAt.Compare(origin.Left.createdAt) != 0 ||
-		left.id.offset+left.contentLen() != origin.Left.offset {
+	if !leftIsOrigin && (left.id.createdAt.Compare(origin.Left.createdAt) != 0 ||
+		left.id.offset+left.contentLen() != origin.Left.offset) {
 		return false
 	}
 	if origin.Right == nil {
@@ -1130,7 +1176,7 @@ func (s *RGATreeSplit[V]) edit(
 		return nil, s.drainPendingGCPairs(), diff, nil, err
 	}
 
-	fromLeft, fromRight, diffFrom, err := s.findNodeWithSplit(from, editedAt)
+	fromLeft, fromRight, diffFrom, fromAtBoundary, err := s.findNodeWithSplitAt(from, editedAt)
 	if err != nil {
 		diff.Add(diffTo)
 		return nil, s.drainPendingGCPairs(), diff, nil, err
@@ -1153,7 +1199,14 @@ func (s *RGATreeSplit[V]) edit(
 	// 03. insert a new node
 	if content.Len() > 0 {
 		insertAfter := fromLeft
-		if origin.Left != nil && !s.isUncontested(fromLeft, fromRight, origin, local) {
+		// fromLeft ends exactly at the left origin when the skip loop did not
+		// move and the origin is from's own boundary, which is how both local
+		// edits and decoded remote edits build it. Knowing that here spares
+		// isUncontested a length count of fromLeft.
+		leftIsOrigin := fromAtBoundary && origin.Left != nil &&
+			origin.Left.offset == from.id.offset+from.relativeOffset &&
+			origin.Left.createdAt.Compare(from.id.createdAt) == 0
+		if origin.Left != nil && !s.isUncontested(fromLeft, fromRight, origin, leftIsOrigin) {
 			insertAfter, err = s.integrate(origin, editedAt, versionVector)
 			if err != nil {
 				return nil, s.drainPendingGCPairs(), diff, nil, err
@@ -1629,4 +1682,29 @@ func (s *RGATreeSplit[V]) Purge(child GCChild) error {
 	node.insPrev, node.insNext = nil, nil
 
 	return nil
+}
+
+// pieceKey is an allocation-free map key for a piece's start ID.
+type pieceKey struct {
+	lamport   int64
+	delimiter uint32
+	actor     time.ActorID
+	offset    int
+}
+
+func pieceKeyOf(id *RGATreeSplitNodeID) pieceKey {
+	return pieceKey{
+		lamport:   id.createdAt.Lamport(),
+		delimiter: id.createdAt.Delimiter(),
+		actor:     id.createdAt.ActorID(),
+		offset:    id.offset,
+	}
+}
+
+// pieceKeyOf0 is pieceKeyOf that maps nil to a key no piece has.
+func pieceKeyOf0(id *RGATreeSplitNodeID) pieceKey {
+	if id == nil {
+		return pieceKey{offset: -1}
+	}
+	return pieceKeyOf(id)
 }
