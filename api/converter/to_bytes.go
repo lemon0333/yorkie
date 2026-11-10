@@ -422,7 +422,12 @@ func toTreeNode(treeNode *crdt.TreeNode, depth int) *api.TreeNode {
 			pbNode.OriginRight = toTreeNodeID(o.Right)
 		}
 	}
-	pbNode.Skeleton = treeNode.IsSkeleton()
+	if treeNode.IsSkeleton() {
+		pbNode.SkeletonLen = 1
+		if treeNode.IsText() {
+			pbNode.SkeletonLen = uint32(treeNode.SkeletonLen())
+		}
+	}
 
 	return pbNode
 }

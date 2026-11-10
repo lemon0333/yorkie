@@ -188,6 +188,10 @@ type TreeNode struct {
 	// windows the placement rule scans, look the same on replicas that
 	// collected it and on replicas that did not; its subtree is dropped.
 	skeleton bool
+
+	// skelLen is the UTF-16 length a text skeleton still covers: its value is
+	// dropped, but its ID range [id.Offset, id.Offset+skelLen) is not.
+	skelLen int
 }
 
 // keptAsSkeleton reports whether a purge keeps this node as a skeleton.
@@ -199,10 +203,21 @@ func (n *TreeNode) IsSkeleton() bool {
 	return n.skeleton
 }
 
-// SetSkeleton marks this node as a collected tombstone. Used when decoding a
-// snapshot.
-func (n *TreeNode) SetSkeleton(skeleton bool) {
-	n.skeleton = skeleton
+// SkeletonLen returns the UTF-16 length a text skeleton covers, or 0.
+func (n *TreeNode) SkeletonLen() int {
+	return n.skelLen
+}
+
+// SetSkeleton marks this node as a collected tombstone. length is the UTF-16
+// length a text skeleton covers and is ignored for an element. Used when
+// decoding a snapshot, on a node built with an empty value.
+func (n *TreeNode) SetSkeleton(length int) {
+	n.skeleton = true
+	if n.IsText() {
+		n.skelLen = length
+		n.Index.VisibleLength = length
+		n.Index.TotalLength = length
+	}
 }
 
 // Children returns the children of this node.
@@ -257,6 +272,9 @@ func (n *TreeNode) IsRemoved() bool {
 
 // Length returns the length of this node.
 func (n *TreeNode) Length() int {
+	if n.skeleton && n.IsText() {
+		return n.skelLen
+	}
 	encoded := utf16.Encode([]rune(n.Value))
 	return len(encoded)
 }
@@ -322,6 +340,10 @@ func (n *TreeNode) Child(offset int) (*TreeNode, error) {
 // Purge removes the given child from the children.
 func (n *TreeNode) Purge(child GCChild) error {
 	rhtNode := child.(*RHTNode)
+	if n.Attrs == nil {
+		// A skeleton dropped its attributes, tombstones included.
+		return nil
+	}
 	return n.Attrs.Purge(rhtNode)
 }
 
@@ -448,6 +470,32 @@ func (n *TreeNode) SplitText(
 		return nil, diff, fmt.Errorf(
 			"split %s at %d of %d: %w", n.IDString(), offset, n.Len(), ErrSplitOutOfRange,
 		)
+	}
+
+	if n.skeleton {
+		// No value to cut: split the ID range only.
+		right := n.skelLen - offset
+		n.skelLen = offset
+		n.Index.VisibleLength = offset
+		n.Index.TotalLength = offset
+		rightNode := NewTreeNode(&TreeNodeID{
+			CreatedAt: n.id.CreatedAt,
+			Offset:    offset + absOffset,
+		}, n.Type(), nil, "")
+		rightNode.removedAt = n.removedAt
+		rightNode.MergedFrom = n.MergedFrom
+		rightNode.MergedAt = n.MergedAt
+		rightNode.skeleton = true
+		rightNode.skelLen = right
+		rightNode.Index.VisibleLength = right
+		rightNode.Index.TotalLength = right
+		if n.Origin != nil {
+			rightNode.Origin = &TreeInsertOrigin{Left: rightNode.id, Right: n.Origin.Right}
+		}
+		if err := n.Index.Parent.InsertAfterInternal(rightNode.Index, n.Index); err != nil {
+			return nil, diff, err
+		}
+		return rightNode, diff, nil
 	}
 
 	encoded := utf16.Encode([]rune(n.Value))
@@ -704,6 +752,10 @@ func (n *TreeNode) canDelete(removedAt *time.Ticket, creationKnown, tombstoneKno
 // canStyle checks if node is able to set style. It answers the same question
 // as RGATreeSplitNode.canStyle, the same way — see the contract there.
 func (n *TreeNode) canStyle(vector time.VersionVector) bool {
+	if n.skeleton {
+		// Collected: no attributes to style, as there is no node in main.
+		return false
+	}
 	return !n.IsText() && time.TicketKnown(vector, n.id.CreatedAt)
 }
 
@@ -730,6 +782,7 @@ func (n *TreeNode) DeepCopy() (*TreeNode, error) {
 	clone.MergedAt = n.MergedAt
 	clone.Origin = n.Origin
 	clone.skeleton = n.skeleton
+	clone.skelLen = n.skelLen
 
 	if n.IsText() {
 		return clone, nil
@@ -800,6 +853,7 @@ func (n *TreeNode) DropEngineOnlyLinks() {
 		// origins to inserted content itself.
 		node.Value.Origin = nil
 		node.Value.skeleton = false
+		node.Value.skelLen = 0
 	})
 }
 
@@ -1200,6 +1254,15 @@ func (t *Tree) Purge(child GCChild) error {
 			})
 		}
 	}
+	// Drop the content too: the value of a text node (its length stays as
+	// skelLen, so IDs and index lengths are unchanged) and the attributes of
+	// an element. Undo refills both from its restore span.
+	if node.IsText() {
+		node.skelLen = node.Length()
+		node.Value = ""
+	} else {
+		node.Attrs = nil
+	}
 	node.skeleton = true
 
 	return nil
@@ -1287,7 +1350,18 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 	// un-removed: under a removed parent it comes back tombstoned with the
 	// parent's removal ticket, otherwise live and reported as recreated (it is
 	// in no GC ledger to move out of).
-	reviveSkeleton := func(node *TreeNode) {
+	reviveSkeleton := func(node *TreeNode, span *TreeRestoreSpan) {
+		if node.IsText() {
+			encoded := utf16.Encode([]rune(span.Value))
+			rel := node.id.Offset - span.ID.Offset
+			node.Value = string(utf16.Decode(encoded[rel : rel+node.skelLen]))
+			node.skelLen = 0
+		} else if span.Attributes != nil {
+			node.Attrs = span.Attributes.DeepCopy()
+			// Copied attribute tombstones are fresh garbage, as in
+			// recreateFromSpan.
+			t.pendingGCPairs = append(t.pendingGCPairs, node.GCPairs()...)
+		}
 		node.skeleton = false
 		if p := node.Index.Parent; p != nil && p.Value.IsRemoved() {
 			node.removedAt = p.Value.RemovedAt()
@@ -1312,7 +1386,7 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 			node := t.findFloorNode(span.ID)
 			if node != nil && node.id.Equal(span.ID) {
 				if node.skeleton {
-					reviveSkeleton(node)
+					reviveSkeleton(node, span)
 				} else if node.IsRemoved() {
 					node.unremove()
 					untombstoned = append(untombstoned, node)
@@ -1353,7 +1427,7 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 					return nil, nil, nil, diff, nil, iErr
 				}
 				if target.skeleton {
-					reviveSkeleton(target)
+					reviveSkeleton(target, span)
 				} else if target.IsRemoved() {
 					target.unremove()
 					untombstoned = append(untombstoned, target)

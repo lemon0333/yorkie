@@ -371,9 +371,14 @@ message TreeNode {
   bool has_origin = 11;
   TreeNodeID origin_left = 12;
   TreeNodeID origin_right = 13;
-  // skeleton marks a garbage-collected tombstone kept in its parent's child
-  // list only for its position; its subtree is gone.
-  bool skeleton = 14;
+  // 14 is held for origin_flags (neighbour-relative origin compression, as
+  // TextNode.origin_flags does); not written yet.
+  reserved 14;
+  // skeleton_len > 0 marks a garbage-collected tombstone kept in its parent's
+  // child list only for its position: its value, attributes and subtree are
+  // gone. For a text node it is the UTF-16 length of the ID range it still
+  // covers; an element writes 1.
+  uint32 skeleton_len = 15;
 }
 
 message TreeNodes {

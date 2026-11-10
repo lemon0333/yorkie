@@ -1570,9 +1570,11 @@ type TreeNode struct {
 	HasOrigin   bool        `protobuf:"varint,11,opt,name=has_origin,json=hasOrigin,proto3" json:"has_origin,omitempty"`
 	OriginLeft  *TreeNodeID `protobuf:"bytes,12,opt,name=origin_left,json=originLeft,proto3" json:"origin_left,omitempty"`
 	OriginRight *TreeNodeID `protobuf:"bytes,13,opt,name=origin_right,json=originRight,proto3" json:"origin_right,omitempty"`
-	// skeleton marks a garbage-collected tombstone kept in its parent's child
-	// list only for its position; its subtree is gone.
-	Skeleton      bool `protobuf:"varint,14,opt,name=skeleton,proto3" json:"skeleton,omitempty"`
+	// skeleton_len > 0 marks a garbage-collected tombstone kept in its parent's
+	// child list only for its position: its value, attributes and subtree are
+	// gone. For a text node it is the UTF-16 length of the ID range it still
+	// covers; an element writes 1.
+	SkeletonLen   uint32 `protobuf:"varint,15,opt,name=skeleton_len,json=skeletonLen,proto3" json:"skeleton_len,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1698,11 +1700,11 @@ func (x *TreeNode) GetOriginRight() *TreeNodeID {
 	return nil
 }
 
-func (x *TreeNode) GetSkeleton() bool {
+func (x *TreeNode) GetSkeletonLen() uint32 {
 	if x != nil {
-		return x.Skeleton
+		return x.SkeletonLen
 	}
-	return false
+	return 0
 }
 
 type TreeNodes struct {
@@ -5610,7 +5612,7 @@ const file_yorkie_v1_resources_proto_rawDesc = "" +
 	"TextNodeID\x124\n" +
 	"\n" +
 	"created_at\x18\x01 \x01(\v2\x15.yorkie.v1.TimeTicketR\tcreatedAt\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x05R\x06offset\"\xc7\x05\n" +
+	"\x06offset\x18\x02 \x01(\x05R\x06offset\"\xd4\x05\n" +
 	"\bTreeNode\x12%\n" +
 	"\x02id\x18\x01 \x01(\v2\x15.yorkie.v1.TreeNodeIDR\x02id\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x14\n" +
@@ -5631,11 +5633,11 @@ const file_yorkie_v1_resources_proto_rawDesc = "" +
 	"has_origin\x18\v \x01(\bR\thasOrigin\x126\n" +
 	"\vorigin_left\x18\f \x01(\v2\x15.yorkie.v1.TreeNodeIDR\n" +
 	"originLeft\x128\n" +
-	"\forigin_right\x18\r \x01(\v2\x15.yorkie.v1.TreeNodeIDR\voriginRight\x12\x1a\n" +
-	"\bskeleton\x18\x0e \x01(\bR\bskeleton\x1aR\n" +
+	"\forigin_right\x18\r \x01(\v2\x15.yorkie.v1.TreeNodeIDR\voriginRight\x12!\n" +
+	"\fskeleton_len\x18\x0f \x01(\rR\vskeletonLen\x1aR\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12)\n" +
-	"\x05value\x18\x02 \x01(\v2\x13.yorkie.v1.NodeAttrR\x05value:\x028\x01\":\n" +
+	"\x05value\x18\x02 \x01(\v2\x13.yorkie.v1.NodeAttrR\x05value:\x028\x01J\x04\b\x0e\x10\x0f\":\n" +
 	"\tTreeNodes\x12-\n" +
 	"\acontent\x18\x01 \x03(\v2\x13.yorkie.v1.TreeNodeR\acontent\"Z\n" +
 	"\n" +

@@ -1191,11 +1191,14 @@ func fromTreeNode(pbNode *api.TreeNode) (*crdt.TreeNode, error) {
 		}
 		node.Origin = origin
 	}
-	if pbNode.Skeleton {
-		if removedAt == nil {
-			return nil, goerrors.New("tree node skeleton must be removed")
+	if pbNode.SkeletonLen > 0 {
+		if removedAt == nil || pbNode.Value != "" || len(pbNode.Attributes) > 0 {
+			return nil, goerrors.New("tree node skeleton must be removed and empty")
 		}
-		node.SetSkeleton(true)
+		node.SetSkeleton(int(pbNode.SkeletonLen))
+		if !node.IsText() {
+			node.Attrs = nil
+		}
 	}
 
 	return node, nil
