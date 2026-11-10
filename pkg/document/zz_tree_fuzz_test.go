@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yorkie-team/yorkie/pkg/document"
+	"github.com/yorkie-team/yorkie/pkg/document/crdt"
 	"github.com/yorkie-team/yorkie/pkg/document/json"
 	"github.com/yorkie-team/yorkie/pkg/document/presence"
 )
@@ -121,10 +122,16 @@ func TestZZTreeFuzz(t *testing.T) {
 			diverged, errs := 0, 0
 			var first string
 			first0 := 0
+			if v := os.Getenv("ZZ_SEED0"); v != "" {
+				first0, _ = strconv.Atoi(v)
+				trials += first0
+			}
 			if v := os.Getenv("ZZ_SEED"); v != "" {
 				first0, _ = strconv.Atoi(v)
 				trials = first0 + 1
 			}
+			config := fmt.Sprintf("origins=%v skeletonGC=%v gc=%v seeds=[%d,%d)",
+				crdt.TreeOrigins, crdt.TreeSkeletonGC, os.Getenv("ZZ_NOGC") == "", first0, trials)
 			for seed := first0; seed < trials; seed++ {
 				rnd := rand.New(rand.NewSource(int64(seed)))
 				n := 2 + rnd.Intn(2)
@@ -201,16 +208,16 @@ func TestZZTreeFuzz(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("TREEFUZZ mix=%s diverged=%d errors=%d of %d", mix, diverged, errs, trials)
+			t.Logf("TREEFUZZ mix=%s diverged=%d errors=%d of %d (%s)", mix, diverged, errs, trials-first0, config)
 			if first != "" {
-				t.Logf("first problem:\n%s", first)
+				t.Logf("first problem (%s):\n%s", config, first)
 			}
 			if mix == "text" {
 				// Without element split/merge the Tree converges outright.
 				// The struct mix is measured, not asserted: the createdAt-only
 				// Tree already diverges under concurrent split/merge.
-				require.Zero(t, diverged)
-				require.Zero(t, errs)
+				require.Zero(t, diverged, "%s\n%s", config, first)
+				require.Zero(t, errs, "%s\n%s", config, first)
 			}
 		})
 	}
