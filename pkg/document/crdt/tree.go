@@ -1363,6 +1363,9 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 			t.pendingGCPairs = append(t.pendingGCPairs, node.GCPairs()...)
 		}
 		node.skeleton = false
+		// A collected merge source keeps its lineage like a tombstone does,
+		// and comes back with it dissolved for the same reason (dissolveMerge).
+		t.dissolveMerge(node)
 		if p := node.Index.Parent; p != nil && p.Value.IsRemoved() {
 			node.removedAt = p.Value.RemovedAt()
 			gcSize := node.DataSize()
@@ -1388,6 +1391,7 @@ func (t *Tree) Restore(spans []*TreeRestoreSpan, measure bool) (
 				if node.skeleton {
 					reviveSkeleton(node, span)
 				} else if node.IsRemoved() {
+					t.dissolveMerge(node)
 					node.unremove()
 					untombstoned = append(untombstoned, node)
 					revived(node)
@@ -4878,6 +4882,34 @@ func (t *Tree) findMergeNode(id *TreeNodeID) *TreeNode {
 	}
 
 	return node
+}
+
+// dissolveMerge erases the merge lineage a node about to be revived leaves
+// behind: the forwarding pointer on the source and the MergedFrom/MergedAt
+// stamps on the children that merge moved into the destination.
+//
+// mergedInto is derivable only for a source that is already a tombstone --
+// rebuildMergeState and the merge in Edit both require it -- so a revived
+// source that kept either half of the lineage makes the replica running the
+// undo disagree with one loading a snapshot, and lets a later delete of the
+// revived source cascade through §6.2 into children that now belong to the
+// destination. The destination is resolved through findMergeNode for the same
+// reason the §6.2 cascade does. Mirrors the JS CRDTTree.dissolveMerge.
+func (t *Tree) dissolveMerge(src *TreeNode) {
+	if src.mergedInto == nil {
+		return
+	}
+	dest := t.findMergeNode(src.mergedInto)
+	src.mergedInto = nil
+	if dest == nil {
+		return
+	}
+	for _, child := range dest.Index.Children(true) {
+		if child.Value.MergedFrom != nil && child.Value.MergedFrom.Equal(src.id) {
+			child.Value.MergedFrom = nil
+			child.Value.MergedAt = nil
+		}
+	}
 }
 
 // findFloorNode returns node from given id.
