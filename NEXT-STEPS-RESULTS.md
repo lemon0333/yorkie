@@ -101,3 +101,58 @@ coordinator 제안과 다른 점: TreeEdit에 `origin_left`를 두지 않았다.
 4. **js-sdk 미반영**: Text와 Tree의 origin, skeleton, 필드 번호를 js-sdk가 똑같이 구현해야 한다(`TREE-RIGHT-ORIGIN-SPEC.md`). 그 전까지 Go 서버의 스냅샷을 JS 클라이언트가 읽으면 skeleton을 잘못 해석한다.
 5. **Wafflebase Docs 적용 전 확인할 것**: Docs는 Yorkie Tree를 쓰므로 이 엔진과 js-sdk 반영이 함께 들어가야 한다. 이번에 integration 테스트(`test/integration`, 서버 필요)는 돌리지 않았다.
 6. **한 번만 나타난 실패**: `TREE_PHYS_GC=1 TREE_NO_ORIGIN=1`(main과 같은 동작) 조합에서 `TestZZTreeFuzz`가 한 번 실패했고 재현되지 않았다. 이후 3번 연속 통과했고, 2만 건 측정에서도 text-only 0이었다.
+
+---
+
+# 추가 작업 결과 — split/merge 발산 줄이기, 한 번 났던 fuzz 실패, conformance
+
+## A. 커밋
+
+| 커밋 | 내용 |
+|---|---|
+| `74c62dc1` Place Tree inserts into a merged-away parent by origin | merge redirect 경로에서도 origin 스캔. nil Left는 "어느 부모의 맨 앞"인지까지 비교(`sameLeft`, MergedFrom) |
+| `d8eedb0b` Order Tree splits and unseen split products by origin | split이 right origin을 기록하고 그 바로 앞에서 자름(`splitCutLeft`). 모르는 split 산물의 자식까지 이어서 훑음(`unknownSplitTail`). 스캔이 자기 Right에 닿으면 멈춤 |
+| `57572ea9` Log the Tree fuzz configuration with every result | fuzz 로그와 실패 메시지에 설정(origins/skeletonGC/gc/seed 범위)을 남김. `ZZ_SEED0`(시작 seed) 추가 |
+| (이 문서 커밋) | 명세·결과 갱신 |
+
+## B. 기준값 정정
+
+앞에서 쓴 "원래 Tree 296"은 측정 오류였다. zsh에서 `env $cfg`가 단어로 나뉘지 않아서, `TREE_NO_ORIGIN=1 TREE_PHYS_GC=1`이 실제로는 "origin 끔 + skeleton GC"로 실행됐다. `env ${=cfg}`로 다시 잰 값은 다음과 같다(split/merge 포함 fuzz, 20,000회).
+
+| 설정 | GC 포함 | GC 없음 |
+|---|---|---|
+| 원래 Tree (origin 끔, 물리 GC) | 312 + 에러 6 | 299 |
+| origin 끔 + skeleton GC | 296 | 299 |
+| 이번 작업 전 (`d15e7ce1`, origin + skeleton) | 325 | 336 |
+| 이번 작업 후 (`d8eedb0b`) | **281, 에러 0** | **292** |
+
+목표였던 "원래 Tree 수준 이하"를 GC 포함·미포함 모두 달성했다. text-only 2만 0, 섞임 0%(Text 16 + Tree 16개 설정), `go test ./pkg/... ./api/...` 통과는 그대로다.
+
+## C. 원인 분류 (origin을 켜면 생기던 발산)
+
+1. **merge redirect** (seed 6131): 부모가 merge로 사라진 뒤 들어온 삽입이 origin 없이 배치됐다 → `74c62dc1`.
+2. **split의 자르는 지점** (seed 902 일부): split이 createdAt 규칙으로 자를 곳을 정해서, 동시 삽입이 어느 쪽에 남을지가 삽입 규칙과 어긋났다 → cut 규칙.
+3. **모르는 split 뒤의 삽입** (seed 902): 끝(nil)을 Right로 가진 삽입이, 작성자가 몰랐던 split으로 생긴 산물 쪽을 보지 않았다 → `unknownSplitTail`.
+4. **자기 Right 지나치기** (seed 1167, 3번을 고치며 생긴 회귀): split continuation이 같은 Left를 가져서 형제로 비교됐다 → Right에서 멈춤.
+5. **남은 것** (seed 1941, 13437 등): merge와 동시 split이 겹친 뒤의 삽입이다. 원래 Tree의 split/merge 경쟁이 만든 replica별 tombstone 순서 차이를 origin 스캔이 그대로 읽는 것으로 추정한다(미확인). seed 단위로는 origin 때문에 새로 생긴 발산 65개, origin으로 해결된 발산 72개다.
+
+## D. 한 번 났던 `TestZZTreeFuzz` 실패
+
+- 당시 설정은 실제로 "origin 끔 + skeleton GC"였다(B의 zsh 문제). 코드는 Tree skeleton이 내용을 버리게 바꾸던 커밋 전의 중간 상태였다.
+- 재현 시도: text-only 2,000 seed × `-count=20`, 그리고 seed 2000–10000, 10000–18000, 50000–58000을 네 설정(origin 끔+skeleton / origin 끔+물리 / 기본 / origin+물리)에서 돌렸다.
+  - "origin + 물리 GC"를 뺀 세 설정은 모두 **발산 0, 에러 0**이었다.
+  - 20번 반복한 결과는 매번 같은 숫자였다(결정적).
+- 무작위성 점검:
+  - `pkg/document` 테스트에는 `t.Parallel`이 없다.
+  - 테스트가 바꾸는 전역은 `json.RecordInsertOrigins`(Text 전용, defer로 원복)뿐이다.
+  - Tree origin 코드의 map은 조회에만 쓰고 순회하지 않는다.
+  - 시간 의존 값도 쓰지 않는다.
+- 결론: **재현되지 않았다.** 당시 커밋 전 중간 코드의 문제였을 가능성이 가장 크다. 이후로는 실패하면 seed와 설정이 로그와 실패 메시지에 남는다.
+- 참고: "origin + 물리 GC"는 2,000 seed당 12회 발산하고 에러도 난다. 이건 재현되는 알려진 결과이고, skeleton GC가 필요한 이유다.
+
+## E. conformance (js-sdk 교차 검증, `d15e7ce1` 기준, 별도 worktree, 커밋 안 함)
+
+- parity diverged(원래 → 새 값): is 41→38, del 27→25, merge 130→132, style 23→24, all 89→89, all3 133→136. JS 새 값(38/25/132/24/136)과 일치한다.
+- corpus status.go: 12개 개선(11개는 skeleton GC, js1436-min-b는 origin 효과). `split-product-walk-past-concurrent-insert`는 pass → known-fail이지만, 세 replica 모두 `x n`으로 수렴한다. 같은 origin의 tie-break 순서 때문이라 기대 XML만 바꾸면 된다.
+- `TestLaggingMinVV`: 원래 error를 기대하던 스크립트가 skeleton GC로 pass하게 돼서 기대값을 바꿔야 한다.
+- 이 브랜치(`exp/right-origin-gc`)에서는 conformance ledger를 갱신하지 않았다. 그래서 `go test ./test/conformance/...`는 위 항목들 때문에 실패한다. js-sdk와 함께 갱신해야 한다. `d8eedb0b` 이후에도 corpus 상태 변화는 위와 같다(같은 13개).
