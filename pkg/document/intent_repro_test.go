@@ -98,7 +98,12 @@ func TestIntentRepro(t *testing.T) {
 		crossSync(t, d1, d2)
 
 		require.Equal(t, intentText(d1), intentText(d2))
-		require.Equal(t, "Xabc가나다Y", intentText(d1))
+		// Each word is one insertion at the same caret, so both carry the
+		// same left origin (after X) and the same right origin (Y): nothing
+		// in the operations says which word was meant to come first, and the
+		// order falls to the actor tie-break. What the two-origin rule does
+		// guarantee is that the words do not interleave.
+		require.Contains(t, []string{"Xabc가나다Y", "X가나다abcY"}, intentText(d1))
 		t.Logf("RESULT single_op_words: %s", intentText(d1))
 	})
 }
